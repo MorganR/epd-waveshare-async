@@ -1,5 +1,7 @@
 # epd-waveshare-async
 
+![build-status](https://github.com/MorganR/epd-waveshare-async/actions/workflows/build.yaml/badge.svg?branch=main&event=push)
+
 Async drivers for Waveshare's e-paper displays.
 
 This is inspired by both the existing (sync) [epd-waveshare](https://github.com/caemor/epd-waveshare) crate, and the [e-Paper](https://github.com/waveshareteam/e-Paper/tree/master) code published by Waveshare directly. It includes modifications related to local testing.
