@@ -1,0 +1,7 @@
+[package]
+name = "epd-waveshare-async"
+authors = ["Morgan Roff"]
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
