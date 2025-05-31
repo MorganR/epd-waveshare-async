@@ -1,0 +1,25 @@
+{
+  "name": "epd-waveshare-async",
+  "version": "1.0.0",
+  "description": "Async drivers for Waveshare's e-paper displays.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepare": "husky"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MorganR/epd-waveshare-async.git"
+  },
+  "author": "Morgan Roff",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/MorganR/epd-waveshare-async/issues"
+  },
+  "homepage": "https://github.com/MorganR/epd-waveshare-async#readme",
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^16.1.0",
+    "prettier": "^3.5.3"
+  }
+}
