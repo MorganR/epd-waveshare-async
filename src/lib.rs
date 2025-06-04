@@ -13,6 +13,7 @@ use embedded_hal_async::{
     spi::{ErrorType as SpiErrorType, SpiBus},
 };
 
+pub mod buffer;
 pub mod epd2in9;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
