@@ -54,7 +54,7 @@ pub enum Command {
     /// Activates the display update sequence. This must be set beforehand using [DisplayUpdateControl2].
     /// This operation must not be interrupted.
     MasterActivation = 0x20,
-    /// ? bypass ?
+    /// Can be used to bypass the RAM content and directly read 1 or 0 for all pixels.
     DisplayUpdateControl1 = 0x21,
     /// Configures the display update sequence for use with [MasterActivation].
     DisplayUpdateControl2 = 0x22,
@@ -142,7 +142,7 @@ where
         { binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)) },
     >;
 
-    async fn init(&mut self, lut: &[u8]) -> Result<(), HW::Error> {
+    async fn init(&mut self, spi: &mut HW::Spi, lut: &[u8]) -> Result<(), HW::Error> {
         if lut.len() != 30 {
             Err(Error::InvalidArgument)?
         }
@@ -151,37 +151,38 @@ where
         self.hw.reset().set_high()?;
 
         // Reset everything to defaults.
-        self.send(Command::SwReset, &[]).await?;
+        self.send(spi, Command::SwReset, &[]).await?;
 
-        self.send(Command::DriverOutputControl, &DRIVER_OUTPUT_INIT_DATA)
+        self.send(spi, Command::DriverOutputControl, &DRIVER_OUTPUT_INIT_DATA)
             .await?;
         self.send(
+            spi,
             Command::BoosterSoftStartControl,
             &BOOSTER_SOFT_START_INIT_DATA,
         )
         .await?;
         // Auto-increment X and Y, moving in the X direction first.
-        self.send(Command::DataEntryModeSetting, &[0b11]).await?;
+        self.send(spi, Command::DataEntryModeSetting, &[0b11]).await?;
 
         // Apply more magical config settings from the sample code.
-        self.send(Command::WriteVcom, &[0xA8]).await?;
+        self.send(spi, Command::WriteVcom, &[0xA8]).await?;
         // Configure 4 dummy lines per gate.
-        self.send(Command::SetDummyLinePeriod, &[0x1A]).await?;
+        self.send(spi, Command::SetDummyLinePeriod, &[0x1A]).await?;
         // 2us per line.
-        self.send(Command::SetGateLineWidth, &[0x08]).await?;
+        self.send(spi, Command::SetGateLineWidth, &[0x08]).await?;
 
-        self.send(Command::WriteLut, lut).await?;
+        self.send(spi, Command::WriteLut, lut).await?;
 
         Ok(())
     }
 
-    async fn clear(&mut self) -> Result<(), HW::Error> {
+    async fn clear(&mut self, spi: &mut HW::Spi) -> Result<(), HW::Error> {
         // Bypass the RAM to read 1 (white) for all values. This should be faster than re-writing
         // all the display data.
-        self.send(Command::DisplayUpdateControl1, &[0x90]).await?;
-        self.update_display().await?;
+        self.send(spi, Command::DisplayUpdateControl1, &[0x90]).await?;
+        self.update_display(spi).await?;
         // Disable bypass for future commands.
-        self.send(Command::DisplayUpdateControl1, &[0x01]).await?;
+        self.send(spi, Command::DisplayUpdateControl1, &[0x01]).await?;
 
         Ok(())
     }
@@ -195,21 +196,25 @@ where
         Ok(())
     }
 
-    async fn sleep(&mut self) -> Result<(), <HW as EpdHw>::Error> {
-        self.send(Command::DeepSleepMode, &[0x01]).await
+    async fn sleep(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+        self.send(spi, Command::DeepSleepMode, &[0x01]).await
     }
 
-    async fn wake(&mut self) -> Result<(), <HW as EpdHw>::Error> {
+    async fn wake(&mut self, _spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
         self.reset().await
 
         // TODO: is init needed?
     }
 
-    async fn display_buffer(&mut self, buffer: &Self::Buffer) -> Result<(), <HW as EpdHw>::Error> {
+    async fn display_buffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buffer: &Self::Buffer,
+    ) -> Result<(), <HW as EpdHw>::Error> {
         let buffer_bounds = buffer.bounding_box();
-        self.set_window(buffer_bounds).await?;
-        self.set_cursor(buffer_bounds.top_left).await?;
-        self.write_image(buffer.data()).await?;
+        self.set_window(spi, buffer_bounds).await?;
+        self.set_cursor(spi, buffer_bounds.top_left).await?;
+        self.write_image(spi, buffer.data()).await?;
 
         Ok(())
     }
@@ -217,7 +222,11 @@ where
     /// Sets the window to which the next image data will be written.
     ///
     /// The x-axis only supports multiples of 8; values outside this result in an [Error::InvalidArgument] error.
-    async fn set_window(&mut self, shape: Rectangle) -> Result<(), <HW as EpdHw>::Error> {
+    async fn set_window(
+        &mut self,
+        spi: &mut HW::Spi,
+        shape: Rectangle,
+    ) -> Result<(), <HW as EpdHw>::Error> {
         let x_start = shape.top_left.x;
         let x_end = x_start + shape.size.width as i32;
         if x_start % 8 != 0 || x_end % 8 != 0 {
@@ -225,7 +234,7 @@ where
         }
         let x_start_byte = (x_start >> 3) as u8;
         let x_end_byte = (x_end >> 8) as u8;
-        self.send(Command::SetRamXStartEnd, &[x_start_byte, x_end_byte])
+        self.send(spi, Command::SetRamXStartEnd, &[x_start_byte, x_end_byte])
             .await?;
 
         let y_start = shape.top_left.y;
@@ -235,6 +244,7 @@ where
         let y_end_low = (y_end & 0xFF) as u8;
         let y_end_high = ((y_end >> 8) & 0xFF) as u8;
         self.send(
+            spi,
             Command::SetRamYStartEnd,
             &[y_start_low, y_start_high, y_end_low, y_end_high],
         )
@@ -246,33 +256,46 @@ where
     /// Sets the cursor position to write the next data to.
     ///
     /// The x-axis only supports multiples of 8; values outside this will result in [Error::InvalidArgument].
-    async fn set_cursor(&mut self, position: Point) -> Result<(), <HW as EpdHw>::Error> {
+    async fn set_cursor(
+        &mut self,
+        spi: &mut HW::Spi,
+        position: Point,
+    ) -> Result<(), <HW as EpdHw>::Error> {
         if position.x % 8 != 0 {
             Err(Error::InvalidArgument)?
         }
-        self.send(Command::SetRamX, &[(position.x >> 3) as u8])
+        self.send(spi, Command::SetRamX, &[(position.x >> 3) as u8])
             .await?;
         let y_low = (position.y & 0xFF) as u8;
         let y_high = ((position.y >> 8) & 0xFF) as u8;
-        self.send(Command::SetRamY, &[y_low, y_high]).await?;
+        self.send(spi, Command::SetRamY, &[y_low, y_high]).await?;
         Ok(())
     }
 
-    async fn update_display(&mut self) -> Result<(), <HW as EpdHw>::Error> {
+    async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
         // Enable the clock and CP (?), and then display the latest data.
         // self.send(Command::DisplayUpdateControl2, &[0xC4]).await?;
         // To try: just display the pattern
-        self.send(Command::DisplayUpdateControl2, &[0x04]).await?;
-        self.send(Command::MasterActivation, &[]).await?;
-        self.send(Command::Noop, &[]).await?;
+        self.send(spi, Command::DisplayUpdateControl2, &[0x04]).await?;
+        self.send(spi, Command::MasterActivation, &[]).await?;
+        self.send(spi, Command::Noop, &[]).await?;
         Ok(())
     }
 
-    async fn write_image(&mut self, image: &[u8]) -> Result<(), <HW as EpdHw>::Error> {
-        self.send(Command::WriteRam, image).await
+    async fn write_image(
+        &mut self,
+        spi: &mut HW::Spi,
+        image: &[u8],
+    ) -> Result<(), <HW as EpdHw>::Error> {
+        self.send(spi, Command::WriteRam, image).await
     }
 
-    async fn send(&mut self, command: Command, data: &[u8]) -> Result<(), HW::Error> {
+    async fn send(
+        &mut self,
+        spi: &mut HW::Spi,
+        command: Command,
+        data: &[u8],
+    ) -> Result<(), HW::Error> {
         self.wait_if_busy().await?;
 
         self.hw.cs().set_low()?;
