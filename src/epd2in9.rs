@@ -1,13 +1,16 @@
 use core::time::Duration;
 use embedded_graphics::{
     pixelcolor::BinaryColor,
-    prelude::Point,
+    prelude::{Dimensions, Point, Size},
     primitives::Rectangle,
 };
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiBus};
 
-use crate::{Epd, EpdHw, Error};
+use crate::{
+    buffer::{binary_buffer_length, BinaryBuffer},
+    Epd, EpdHw, Error,
+};
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
 ///
@@ -135,6 +138,9 @@ where
     HW: EpdHw,
 {
     type Command = Command;
+    type Buffer = BinaryBuffer<
+        { binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)) },
+    >;
 
     async fn init(&mut self, lut: &[u8]) -> Result<(), HW::Error> {
         if lut.len() != 30 {
@@ -197,6 +203,15 @@ where
         self.reset().await
 
         // TODO: is init needed?
+    }
+
+    async fn display_buffer(&mut self, buffer: &Self::Buffer) -> Result<(), <HW as EpdHw>::Error> {
+        let buffer_bounds = buffer.bounding_box();
+        self.set_window(buffer_bounds).await?;
+        self.set_cursor(buffer_bounds.top_left).await?;
+        self.write_image(buffer.data()).await?;
+
+        Ok(())
     }
 
     /// Sets the window to which the next image data will be written.

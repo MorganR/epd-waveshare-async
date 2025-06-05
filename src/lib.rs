@@ -2,10 +2,7 @@
 
 use core::error::Error as CoreError;
 
-use embedded_graphics::{
-    prelude::Point,
-    primitives::Rectangle,
-};
+use embedded_graphics::{prelude::Point, primitives::Rectangle};
 use embedded_hal::digital::{ErrorType as PinErrorType, InputPin, OutputPin};
 use embedded_hal_async::{
     delay::DelayNs,
@@ -27,6 +24,7 @@ where
     HW: EpdHw,
 {
     type Command;
+    type Buffer;
 
     /// Initialise the display. This must be called before any other operations.
     async fn init(&mut self, lut: &[u8]) -> Result<(), HW::Error>;
@@ -42,6 +40,9 @@ where
 
     /// Wakes and re-initialises the display if it's asleep.
     async fn wake(&mut self) -> Result<(), HW::Error>;
+
+    /// Writes the buffers data to the display and displays it.
+    async fn display_buffer(&mut self, buffer: &Self::Buffer) -> Result<(), HW::Error>;
 
     /// Sets the window to write to during a call to [write_image]. This can enable partial writes
     /// to a subsection of the display.
