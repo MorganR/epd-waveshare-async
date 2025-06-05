@@ -3,6 +3,8 @@ name = "epd-waveshare-async"
 authors = ["Morgan Roff"]
 version = "0.1.0"
 edition = "2021"
+description = "Async drivers for Waveshare's e-paper displays."
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 embedded-graphics = "0.8.1"
