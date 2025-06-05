@@ -10,29 +10,45 @@ use embedded_graphics::{
 /// A compact buffer for storing binary coloured display data.
 ///
 /// This buffer packs the data such that each byte represents 8 pixels.
-pub struct BinaryBuffer<const S: usize> {
+pub struct BinaryBuffer<const L: usize> {
     size: Size,
     bytes_per_row: usize,
     // Data rounds the length of each row up to the next whole byte.
-    data: [u8; S],
+    data: [u8; L],
 }
 
+/// Computes the correct size for the binary buffer based on the given dimensions.
 pub const fn binary_buffer_length(size: Size) -> usize {
     (size.width as usize / 8) * size.height as usize
 }
 
-impl<const S: usize> BinaryBuffer<S> {
+impl<const L: usize> BinaryBuffer<L> {
     /// Creates a new [BinaryBuffer] with all pixels set to `BinaryColor::Off`.
-    pub fn new(size: Size) -> Self {
+    /// 
+    /// The dimensions must match the buffer length `L`, and the width must be a multiple of 8.
+    ///
+    /// ```
+    /// use embedded_graphics::prelude::Size;
+    /// use epd_waveshare_async::buffer::{binary_buffer_length, BinaryBuffer};
+    ///
+    /// const DIMENSIONS: Size = Size::new(8, 8);
+    /// let buffer = BinaryBuffer::<{binary_buffer_length(DIMENSIONS)}>::new(DIMENSIONS);
+    /// ```
+    pub fn new(dimensions: Size) -> Self {
         debug_assert_eq!(
-            size.width % 8,
+            dimensions.width % 8,
             0,
             "Width must be a multiple of 8 for binary packing."
         );
+        debug_assert_eq!(
+            binary_buffer_length(dimensions),
+            L,
+            "Size must match given dimensions"
+        );
         Self {
-            bytes_per_row: size.width as usize / 8,
-            size,
-            data: [0; S],
+            bytes_per_row: dimensions.width as usize / 8,
+            size: dimensions,
+            data: [0; L],
         }
     }
 
@@ -42,13 +58,13 @@ impl<const S: usize> BinaryBuffer<S> {
     }
 }
 
-impl<const S: usize> Dimensions for BinaryBuffer<S> {
+impl<const L: usize> Dimensions for BinaryBuffer<L> {
     fn bounding_box(&self) -> Rectangle {
         Rectangle::new(Point::zero(), self.size)
     }
 }
 
-impl<const S: usize> DrawTarget for BinaryBuffer<S> {
+impl<const L: usize> DrawTarget for BinaryBuffer<L> {
     type Color = BinaryColor;
 
     type Error = Infallible;
@@ -208,5 +224,19 @@ mod tests {
             buffer.data, previous_data,
             "Data should not change when drawing out-of-bounds pixels."
         );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn test_binary_buffer_must_have_aligned_width() {
+        let _ = BinaryBuffer::<16>::new(Size::new(10, 10));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn test_binary_buffer_size_must_match_dimensions() {
+        let _ = BinaryBuffer::<16>::new(Size::new(16, 10));
     }
 }
