@@ -123,12 +123,12 @@ where
     }
 
     /// Sets the border to the specified colour.
-    pub async fn set_border(&mut self, color: BinaryColor) -> Result<(), HW::Error> {
+    pub async fn set_border(&mut self, spi: &mut HW::Spi, color: BinaryColor) -> Result<(), HW::Error> {
         let border_setting: u8 = match color {
             BinaryColor::Off => 0x40, // Ground for black
             BinaryColor::On => 0x50,  // Set high for white
         };
-        self.send(Command::BorderWaveformControl, &[border_setting])
+        self.send(spi, Command::BorderWaveformControl, &[border_setting])
             .await
     }
 }
@@ -300,11 +300,11 @@ where
 
         self.hw.cs().set_low()?;
         self.hw.dc().set_low()?;
-        self.hw.spi().write(&[command.register()]).await?;
+        spi.write(&[command.register()]).await?;
 
         if !data.is_empty() {
             self.hw.dc().set_high()?;
-            self.hw.spi().write(data).await?;
+            spi.write(data).await?;
         }
 
         self.hw.cs().set_high()?;
