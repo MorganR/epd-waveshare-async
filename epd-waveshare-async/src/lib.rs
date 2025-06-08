@@ -42,14 +42,22 @@ where
     async fn wake(&mut self, spi: &mut HW::Spi) -> Result<(), HW::Error>;
 
     /// Writes the buffers data to the display and displays it.
-    async fn display_buffer(&mut self, spi: &mut HW::Spi, buffer: &Self::Buffer) -> Result<(), HW::Error>;
+    async fn display_buffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buffer: &Self::Buffer,
+    ) -> Result<(), HW::Error>;
 
     /// Sets the window to write to during a call to [write_image]. This can enable partial writes
     /// to a subsection of the display.
     async fn set_window(&mut self, spi: &mut HW::Spi, shape: Rectangle) -> Result<(), HW::Error>;
 
     /// Sets the cursor position for where the next byte of image data will be written.
-    async fn set_cursor(&mut self, spi: &mut HW::Spi, position: Point) -> Result<(), <HW as EpdHw>::Error>;
+    async fn set_cursor(
+        &mut self,
+        spi: &mut HW::Spi,
+        position: Point,
+    ) -> Result<(), <HW as EpdHw>::Error>;
 
     /// Writes raw image data, starting at the current cursor position and auto-incrementing x then y within the current window.
     async fn write_image(&mut self, spi: &mut HW::Spi, image: &[u8]) -> Result<(), HW::Error>;
@@ -58,7 +66,12 @@ where
     async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), HW::Error>;
 
     /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
-    async fn send(&mut self, spi: &mut HW::Spi, command: Self::Command, data: &[u8]) -> Result<(), HW::Error>;
+    async fn send(
+        &mut self,
+        spi: &mut HW::Spi,
+        command: Self::Command,
+        data: &[u8],
+    ) -> Result<(), HW::Error>;
 
     /// Waits for the current operation to complete if the display is busy.
     /// Note that this will wait forever if the display is asleep.

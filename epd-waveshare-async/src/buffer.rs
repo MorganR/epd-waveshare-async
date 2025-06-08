@@ -24,7 +24,7 @@ pub const fn binary_buffer_length(size: Size) -> usize {
 
 impl<const L: usize> BinaryBuffer<L> {
     /// Creates a new [BinaryBuffer] with all pixels set to `BinaryColor::Off`.
-    /// 
+    ///
     /// The dimensions must match the buffer length `L`, and the width must be a multiple of 8.
     ///
     /// ```

@@ -123,7 +123,11 @@ where
     }
 
     /// Sets the border to the specified colour.
-    pub async fn set_border(&mut self, spi: &mut HW::Spi, color: BinaryColor) -> Result<(), HW::Error> {
+    pub async fn set_border(
+        &mut self,
+        spi: &mut HW::Spi,
+        color: BinaryColor,
+    ) -> Result<(), HW::Error> {
         let border_setting: u8 = match color {
             BinaryColor::Off => 0x40, // Ground for black
             BinaryColor::On => 0x50,  // Set high for white
@@ -162,7 +166,8 @@ where
         )
         .await?;
         // Auto-increment X and Y, moving in the X direction first.
-        self.send(spi, Command::DataEntryModeSetting, &[0b11]).await?;
+        self.send(spi, Command::DataEntryModeSetting, &[0b11])
+            .await?;
 
         // Apply more magical config settings from the sample code.
         self.send(spi, Command::WriteVcom, &[0xA8]).await?;
@@ -179,10 +184,12 @@ where
     async fn clear(&mut self, spi: &mut HW::Spi) -> Result<(), HW::Error> {
         // Bypass the RAM to read 1 (white) for all values. This should be faster than re-writing
         // all the display data.
-        self.send(spi, Command::DisplayUpdateControl1, &[0x90]).await?;
+        self.send(spi, Command::DisplayUpdateControl1, &[0x90])
+            .await?;
         self.update_display(spi).await?;
         // Disable bypass for future commands.
-        self.send(spi, Command::DisplayUpdateControl1, &[0x01]).await?;
+        self.send(spi, Command::DisplayUpdateControl1, &[0x01])
+            .await?;
 
         Ok(())
     }
@@ -276,7 +283,8 @@ where
         // Enable the clock and CP (?), and then display the latest data.
         // self.send(Command::DisplayUpdateControl2, &[0xC4]).await?;
         // To try: just display the pattern
-        self.send(spi, Command::DisplayUpdateControl2, &[0x04]).await?;
+        self.send(spi, Command::DisplayUpdateControl2, &[0x04])
+            .await?;
         self.send(spi, Command::MasterActivation, &[]).await?;
         self.send(spi, Command::Noop, &[]).await?;
         Ok(())

@@ -28,9 +28,9 @@ dependencies = [
 
 [[package]]
 name = "assign-resources"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c0fc5119624f5c171d084b6a1bd3b6447dfadab980bb0d84717906239b77f85"
+checksum = "840ad5d907de7448d88a3f22b4a7b5d326c6eb3deeb9f94cfaaec7354a80b305"
 
 [[package]]
 name = "atomic-polyfill"
@@ -1124,7 +1124,6 @@ dependencies = [
  "embedded-hal-async",
  "epd-waveshare-async",
  "panic-probe",
- "thiserror",
 ]
 
 [[package]]

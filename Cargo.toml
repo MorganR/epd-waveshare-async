@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "epd-waveshare-async",
+    "samples/*",
 ]
 default-members = [
     "epd-waveshare-async",
