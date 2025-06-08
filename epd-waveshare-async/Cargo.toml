@@ -1,0 +1,12 @@
+[package]
+name = "epd-waveshare-async"
+authors = ["Morgan Roff"]
+version = "0.1.0-alpha"
+edition = "2021"
+description = "Async drivers for Waveshare's e-paper displays."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+embedded-graphics.workspace = true
+embedded-hal.workspace = true
+embedded-hal-async.workspace = true

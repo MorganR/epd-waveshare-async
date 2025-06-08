@@ -1,12 +1,29 @@
-[package]
-name = "epd-waveshare-async"
+[workspace]
+members = [
+    "epd-waveshare-async",
+]
+default-members = [
+    "epd-waveshare-async",
+]
+resolver = "2"
+
+[workspace.package]
 authors = ["Morgan Roff"]
 version = "0.1.0-alpha"
 edition = "2021"
-description = "Async drivers for Waveshare's e-paper displays."
-license = "MIT OR Apache-2.0"
 
-[dependencies]
-embedded-graphics = "0.8.1"
+[profile.release]
+debug = 2
+lto = true
+opt-level = "z" 
+# Note: could enable codegen-units=1 if we need to reduce the binary size even further
+
+[profile.dev]
+debug = 2
+lto = false
+opt-level = 0
+
+[workspace.dependencies]
+embedded-graphics = { version = "0.8.1" }
 embedded-hal = "1.0.0"
 embedded-hal-async = "1.0.0"
