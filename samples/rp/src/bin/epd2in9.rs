@@ -11,6 +11,9 @@ use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::spi::{self, Spi};
 use embassy_rp::peripherals;
 use embassy_time::{Delay, Timer};
+use embedded_graphics::pixelcolor::BinaryColor;
+use embedded_graphics::prelude::*;
+use epd_waveshare_async::buffer::BinaryBuffer;
 use epd_waveshare_async::{
     epd2in9::{self, Epd2in9},
     Epd, EpdHw,
@@ -24,8 +27,8 @@ assign_resources::assign_resources! {
         clk: PIN_2,
         tx: PIN_3,
         rx: PIN_4,
-        dma_tx: DMA_CH0,
-        dma_rx: DMA_CH1,
+        dma_tx: DMA_CH1,
+        dma_rx: DMA_CH2,
     },
     epd_hw: DisplayP {
         cs: PIN_5,
@@ -62,10 +65,32 @@ async fn main(_spawner: Spawner) {
         epd.init(&mut spi, &epd2in9::LUT_FULL_UPDATE).await,
         "Failed to initialize EPD"
     );
+
+    let mut buffer = epd.buffer();
+    buffer.fill_solid(&buffer.bounding_box(), BinaryColor::On).unwrap();
+    info!("Displaying white buffer");
+    expect!(
+        epd.display_buffer(&mut spi, &buffer).await,
+        "Failed to display buffer"
+    );
     Timer::after_secs(5).await;
 
-    info!("Clearing EPD");
-    expect!(epd.clear(&mut spi).await, "Failed to clear EPD");
+    info!("Displaying black buffer");
+    buffer.fill_solid(&buffer.bounding_box(), BinaryColor::Off).unwrap();
+    expect!(
+        epd.display_buffer(&mut spi, &buffer).await,
+        "Failed to display buffer"
+    );
+    Timer::after_secs(5).await;
+
+    info!("Bypassing to old RAM");
+    expect!(epd.select_ram(&mut spi, 1).await, "Failed to bypass RAM");
+    expect!(epd.update_display(&mut spi).await, "Failed to update display");
+    Timer::after_secs(5).await;
+
+    info!("Back to new RAM");
+    expect!(epd.select_ram(&mut spi, 0).await, "Failed to undo RAM bypass");
+    expect!(epd.update_display(&mut spi).await, "Failed to update display");
     Timer::after_secs(5).await;
 
     info!("Sleeping EPD");

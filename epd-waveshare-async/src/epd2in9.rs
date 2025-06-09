@@ -8,8 +8,7 @@ use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiBus};
 
 use crate::{
-    buffer::{binary_buffer_length, BinaryBuffer},
-    Epd, EpdHw, Error,
+    buffer::{binary_buffer_length, BinaryBuffer}, log::debug, Epd, EpdHw, Error
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -37,6 +36,8 @@ pub const RECOMMENDED_MIN_FULL_REFRESH_INTERVAL: Duration = Duration::from_secs(
 /// It's recommended to do a full refresh at least this often.
 pub const RECOMMENDED_MAX_FULL_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
+#[cfg(feature = "defmt")]
+#[derive(defmt::Format)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     /// Used to initialise the display.
@@ -94,6 +95,7 @@ const DRIVER_OUTPUT_INIT_DATA: [u8; 3] = [0x27, 0x01, 0x00];
 /// This should be sent with [Command::BoosterSoftStartControl] during initialisation.
 /// Note: this comes from the datasheet, but doesn't match the booster data sent in the sample code.
 /// That uses [0xD7, 0xD6, 0x9D]
+// const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xD7, 0xD6, 0x9D];
 const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xCF, 0xCE, 0x8D];
 
 impl Command {
@@ -135,6 +137,22 @@ where
         self.send(spi, Command::BorderWaveformControl, &[border_setting])
             .await
     }
+
+    /// Displays the previous image in RAM.
+    /// 
+    /// This EPD has two RAM buffers, so the last two images can be quickly switched between.
+    /// TODO: Establish a RAM enum.
+    pub async fn select_ram(
+        &mut self,
+        spi: &mut HW::Spi,
+        index: u8, // This should be an enum.
+    ) -> Result<(), HW::Error> {
+        // Options: [0x80] = enable bypass to old RAM, 0x00 = disable bypass.
+        self.send(spi, Command::DisplayUpdateControl1, &[index << 7])
+            .await?;
+
+        Ok(())
+    }
 }
 
 impl<HW> Epd<HW> for Epd2in9<HW>
@@ -153,6 +171,8 @@ where
 
         // Ensure reset is high.
         self.hw.reset().set_high()?;
+        self.hw.delay().delay_ms(200).await;
+        self.reset().await?;
 
         // Reset everything to defaults.
         self.send(spi, Command::SwReset, &[]).await?;
@@ -181,33 +201,29 @@ where
         Ok(())
     }
 
-    async fn clear(&mut self, spi: &mut HW::Spi) -> Result<(), HW::Error> {
-        // Bypass the RAM to read 1 (white) for all values. This should be faster than re-writing
-        // all the display data.
-        self.send(spi, Command::DisplayUpdateControl1, &[0x90])
-            .await?;
-        self.update_display(spi).await?;
-        // Disable bypass for future commands.
-        self.send(spi, Command::DisplayUpdateControl1, &[0x01])
-            .await?;
-
-        Ok(())
+    fn buffer(&self) -> Self::Buffer {
+        BinaryBuffer::new(
+            Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32),
+        )
     }
 
     async fn reset(&mut self) -> Result<(), HW::Error> {
+        debug!("Resetting EPD");
         // Assume reset is already high.
         self.hw.reset().set_low()?;
         self.hw.delay().delay_ms(10).await;
         self.hw.reset().set_high()?;
-        self.hw.delay().delay_ms(10).await;
+        self.hw.delay().delay_ms(200).await;
         Ok(())
     }
 
     async fn sleep(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+        debug!("Sleeping EPD");
         self.send(spi, Command::DeepSleepMode, &[0x01]).await
     }
 
     async fn wake(&mut self, _spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+        debug!("Waking EPD");
         self.reset().await
 
         // TODO: is init needed?
@@ -218,10 +234,13 @@ where
         spi: &mut HW::Spi,
         buffer: &Self::Buffer,
     ) -> Result<(), <HW as EpdHw>::Error> {
+        debug!("Displaying buffer");
         let buffer_bounds = buffer.bounding_box();
         self.set_window(spi, buffer_bounds).await?;
         self.set_cursor(spi, buffer_bounds.top_left).await?;
         self.write_image(spi, buffer.data()).await?;
+
+        self.update_display(spi).await?;
 
         Ok(())
     }
@@ -235,17 +254,17 @@ where
         shape: Rectangle,
     ) -> Result<(), <HW as EpdHw>::Error> {
         let x_start = shape.top_left.x;
-        let x_end = x_start + shape.size.width as i32;
-        if x_start % 8 != 0 || x_end % 8 != 0 {
+        let x_end = x_start + shape.size.width as i32 - 1;
+        if x_start % 8 != 0 || x_end % 8 != 7 {
             Err(Error::InvalidArgument)?
         }
-        let x_start_byte = (x_start >> 3) as u8;
-        let x_end_byte = (x_end >> 8) as u8;
+        let x_start_byte = ((x_start >> 3) & 0xFF) as u8;
+        let x_end_byte = ((x_end >> 3) & 0xFF) as u8;
         self.send(spi, Command::SetRamXStartEnd, &[x_start_byte, x_end_byte])
             .await?;
 
         let y_start = shape.top_left.y;
-        let y_end = y_start + shape.size.height as i32;
+        let y_end = y_start + shape.size.height as i32 - 1;
         let y_start_low = (y_start & 0xFF) as u8;
         let y_start_high = ((y_start >> 8) & 0xFF) as u8;
         let y_end_low = (y_end & 0xFF) as u8;
@@ -281,10 +300,9 @@ where
 
     async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
         // Enable the clock and CP (?), and then display the latest data.
-        // self.send(Command::DisplayUpdateControl2, &[0xC4]).await?;
+        self.send(spi, Command::DisplayUpdateControl2, &[0xC4]).await?;
         // To try: just display the pattern
-        self.send(spi, Command::DisplayUpdateControl2, &[0x04])
-            .await?;
+        // self.send(spi, Command::DisplayUpdateControl2, &[0x04]).await?;
         self.send(spi, Command::MasterActivation, &[]).await?;
         self.send(spi, Command::Noop, &[]).await?;
         Ok(())
@@ -304,6 +322,7 @@ where
         command: Command,
         data: &[u8],
     ) -> Result<(), HW::Error> {
+        debug!("Sending EPD command: {:?}", command);
         self.wait_if_busy().await?;
 
         self.hw.cs().set_low()?;
@@ -314,6 +333,7 @@ where
             self.hw.dc().set_high()?;
             spi.write(data).await?;
         }
+        spi.flush().await?;
 
         self.hw.cs().set_high()?;
         Ok(())
@@ -321,8 +341,9 @@ where
 
     async fn wait_if_busy(&mut self) -> Result<(), HW::Error> {
         let busy = self.hw.busy();
-        if busy.is_low().unwrap() {
-            busy.wait_for_high().await?;
+        if busy.is_high().unwrap() {
+            debug!("Waiting for busy EPD");
+            busy.wait_for_low().await?;
         }
         Ok(())
     }

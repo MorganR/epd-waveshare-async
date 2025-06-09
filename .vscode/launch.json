@@ -1,0 +1,67 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "preLaunchTask": "rust: cargo build rp-samples/epd2in9",
+      "type": "probe-rs-debug",
+      "request": "launch",
+      "name": "rp epd2in9",
+      "cwd": "${workspaceFolder}",
+      "chip": "rp2040",
+      // RP2040 doesn't support connectUnderReset
+      "connectUnderReset": false,
+      "speed": 4000,
+      "runtimeExecutable": "probe-rs",
+      "runtimeArgs": ["dap-server"],
+      "flashingConfig": {
+        "flashingEnabled": true,
+        "haltAfterReset": false
+      },
+      "coreConfigs": [
+        {
+          "coreIndex": 0,
+          "programBinary": "target/thumbv6m-none-eabi/release/epd2in9",
+          "rttEnabled": true,
+          "svdFile": "./.vscode/rp2040.svd"
+        }
+      ],
+      "env": {
+        "DEFMT_LOG": "info,epd_waveshare_async=debug",
+        "EMBASSY_EXECUTOR_TASK_ARENA_SIZE": "98304"
+      },
+      "consoleLogLevel": "Info", //Error, Warn, Info, Debug, Trace
+      "wireProtocol": "Swd"
+    },
+    {
+      "preLaunchTask": "rust: cargo dev build rp-samples/epd2in9",
+      "type": "probe-rs-debug",
+      "request": "launch",
+      "name": "rp epd2in9 dev",
+      "cwd": "${workspaceFolder}",
+      "chip": "rp2040",
+      // RP2040 doesn't support connectUnderReset
+      "connectUnderReset": false,
+      "speed": 4000,
+      "runtimeExecutable": "probe-rs",
+      "runtimeArgs": ["dap-server"],
+      "flashingConfig": {
+        "flashingEnabled": true,
+        "haltAfterReset": false
+      },
+      "coreConfigs": [
+        {
+          "coreIndex": 0,
+          "programBinary": "target/thumbv6m-none-eabi/debug/epd2in9",
+          "rttEnabled": true,
+          "svdFile": "./.vscode/rp2040.svd"
+        }
+      ],
+      "env": {
+        "DEFMT_LOG": "info,epd_waveshare_async=debug",
+        "EMBASSY_EXECUTOR_TASK_ARENA_SIZE": "98304"
+      },
+      "consoleLogLevel": "Info", //Error, Warn, Info, Debug, Trace
+      "wireProtocol": "Swd"
+    }
+  ]
+}

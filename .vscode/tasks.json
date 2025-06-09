@@ -1,0 +1,44 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "cargo",
+      "command": "build",
+      "args": [
+        "--release",
+        "--target",
+        "thumbv6m-none-eabi",
+        "--package",
+        "rp-samples",
+        "--bin",
+        "epd2in9"
+      ],
+      "env": {
+        "DEFMT_LOG": "info,epd_waveshare_async=debug",
+        "EMBASSY_EXECUTOR_TASK_ARENA_SIZE": "98304"
+      },
+      "problemMatcher": ["$rustc"],
+      "group": "build",
+      "label": "rust: cargo build rp-samples/epd2in9"
+    },
+    {
+      "type": "cargo",
+      "command": "build",
+      "args": [
+        "--target",
+        "thumbv6m-none-eabi",
+        "--package",
+        "rp-samples",
+        "--bin",
+        "epd2in9"
+      ],
+      "env": {
+        "DEFMT_LOG": "info,epd_waveshare_async=debug",
+        "EMBASSY_EXECUTOR_TASK_ARENA_SIZE": "98304"
+      },
+      "problemMatcher": ["$rustc"],
+      "group": "build",
+      "label": "rust: cargo dev build rp-samples/epd2in9"
+    }
+  ]
+}

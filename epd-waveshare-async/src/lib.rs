@@ -13,6 +13,8 @@ use embedded_hal_async::{
 pub mod buffer;
 pub mod epd2in9;
 
+mod log;
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Error {
     InvalidArgument,
@@ -29,8 +31,8 @@ where
     /// Initialise the display. This must be called before any other operations.
     async fn init(&mut self, spi: &mut HW::Spi, lut: &[u8]) -> Result<(), HW::Error>;
 
-    /// Clear the display. This may or may not clear internal RAM.
-    async fn clear(&mut self, spi: &mut HW::Spi) -> Result<(), HW::Error>;
+    /// Creates a buffer for use with this display.
+    fn buffer(&self) -> Self::Buffer;
 
     /// Hardware reset the display. The display must be reinitialised after calling this.
     async fn reset(&mut self) -> Result<(), HW::Error>;

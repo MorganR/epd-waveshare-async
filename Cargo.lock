@@ -590,9 +590,11 @@ dependencies = [
 name = "epd-waveshare-async"
 version = "0.1.0-alpha"
 dependencies = [
+ "defmt 1.0.1",
  "embedded-graphics",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
+ "log",
 ]
 
 [[package]]
@@ -1108,7 +1110,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rp-pico-examples"
+name = "rp-samples"
 version = "0.1.0"
 dependencies = [
  "assign-resources",
@@ -1121,6 +1123,7 @@ dependencies = [
  "embassy-executor",
  "embassy-rp",
  "embassy-time",
+ "embedded-graphics",
  "embedded-hal-async",
  "epd-waveshare-async",
  "panic-probe",

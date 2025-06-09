@@ -6,3 +6,4 @@ target = "thumbv6m-none-eabi"        # Cortex-M0 and Cortex-M0+
 
 [env]
 DEFMT_LOG = "info,epd_waveshare_async=debug"
+EMBASSY_EXECUTOR_TASK_ARENA_SIZE = "98304"

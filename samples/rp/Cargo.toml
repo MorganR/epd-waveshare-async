@@ -1,5 +1,6 @@
 [package]
-name = "rp-pico-examples"
+name = "rp-samples"
+description = "Samples for the Raspberry Pi RP2040 using Waveshare e-paper displays."
 authors = ["Morgan Roff"]
 version = "0.1.0"
 edition = "2021"
@@ -17,9 +18,10 @@ cortex-m-rt = "0.7.0"
 critical-section = "1.1"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 
+defmt.workspace = true
+embedded-graphics.workspace = true
 embedded-hal-async.workspace = true
-epd-waveshare-async = { path = "../../epd-waveshare-async" }
+epd-waveshare-async = { path = "../../epd-waveshare-async", features = ["defmt"] }
 embassy-time = { version = "0.4.0", features = ["defmt", "defmt-timestamp-uptime-s"] }
-defmt = "1.0.1"
 thiserror = { version = "2.0.12", default-features = false }
 assign-resources = "0.4.1"

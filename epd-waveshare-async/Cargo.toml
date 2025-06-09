@@ -7,6 +7,13 @@ description = "Async drivers for Waveshare's e-paper displays."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+defmt = { workspace = true, optional = true }
 embedded-graphics.workspace = true
 embedded-hal.workspace = true
 embedded-hal-async.workspace = true
+log = { version = "0.4.27", optional = true }
+
+[features]
+default = []
+defmt = ["dep:defmt"]
+log = ["dep:log"]

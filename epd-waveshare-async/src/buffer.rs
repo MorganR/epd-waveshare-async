@@ -94,6 +94,7 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
         Ok(())
     }
 
+    // TODO: Fix this or remove it, it has bugs.
     fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
     where
         I: IntoIterator<Item = Self::Color>,
@@ -124,7 +125,7 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
                 let Some(color) = colors_iterator.next() else {
                     return Ok(()); // Stop if we run out of colors
                 };
-                if y < 0 || y >= self.size.height as i32 || x < 0 || x >= self.size.width as i32 {
+                if y < 0 || y >= self.size.height as i32 || x < 0 || x >= self.size.width as i32 || byte_index >= self.data.len() {
                     continue; // Skip out-of-bounds pixels
                 }
                 let byte = &mut self.data[byte_index];
@@ -149,7 +150,38 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
         Ok(())
     }
 
-    // TODO: implement `fill_solid`
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        let drawable_area = self.bounding_box().intersection(area);
+        if drawable_area.size.width == 0 || drawable_area.size.height == 0 {
+            return Ok(()); // Nothing to fill
+        }
+
+        let y_start = drawable_area.top_left.y;
+        let y_end = drawable_area.top_left.y + drawable_area.size.height as i32;
+        let x_start = drawable_area.top_left.x;
+        let x_end = drawable_area.top_left.x + drawable_area.size.width as i32;
+
+        let mut byte_index = y_start as usize * self.bytes_per_row;
+        for _y in y_start..y_end {
+            byte_index += (x_start / 8) as usize;
+            let mut bit_index = ((x_start as usize) % 8) as u8;
+            for _x in x_start..x_end {
+                if color == BinaryColor::On {
+                    self.data[byte_index] |= 1 << bit_index;
+                } else {
+                    self.data[byte_index] &= !(1 << bit_index);
+                }
+                bit_index += 1;
+                if bit_index == 8 {
+                    // Move to the next byte after every 8 pixels
+                    byte_index += 1;
+                    bit_index = 0;
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
