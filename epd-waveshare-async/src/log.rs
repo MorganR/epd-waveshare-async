@@ -18,4 +18,14 @@ macro_rules! debug {
     };
 }
 
-pub(crate) use {debug, error};
+macro_rules! trace {
+    ($($arg:tt)*) => {
+        #[cfg(feature = "defmt")]
+        defmt::trace!($($arg)*);
+
+        #[cfg(feature = "log")]
+        log::trace!($($arg)*);
+    };
+}
+
+pub(crate) use {debug, error, trace};

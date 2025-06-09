@@ -11,11 +11,13 @@ use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::spi::{self, Spi};
 use embassy_rp::peripherals;
 use embassy_time::{Delay, Timer};
+use embedded_graphics::mono_font::ascii::FONT_6X10;
+use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
-use epd_waveshare_async::buffer::BinaryBuffer;
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle};
 use epd_waveshare_async::{
-    epd2in9::{self, Epd2in9},
+    epd2in9::{Epd2in9, RefreshMode},
     Epd, EpdHw,
 };
 use thiserror::Error as ThisError;
@@ -62,7 +64,7 @@ async fn main(_spawner: Spawner) {
 
     info!("Initializing EPD");
     expect!(
-        epd.init(&mut spi, &epd2in9::LUT_FULL_UPDATE).await,
+        epd.init(&mut spi, RefreshMode::Full).await,
         "Failed to initialize EPD"
     );
 
@@ -75,6 +77,21 @@ async fn main(_spawner: Spawner) {
     );
     Timer::after_secs(5).await;
 
+    info!("Changing to partial refresh mode");
+    expect!(epd.set_refresh_mode(&mut spi, RefreshMode::Partial)
+        .await, 
+        "Failed to set refresh mode");
+
+    info!("Displaying text");
+    let mut style = TextStyle::default();
+        style.alignment = Alignment::Left;
+        style.baseline = Baseline::Top;
+        let character_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::Off);
+        let text = Text::with_text_style("Hello, EPD!", Point::new(10, 10), character_style, style);
+    text.draw(&mut buffer).unwrap();
+    expect!(epd.display_buffer(&mut spi, &buffer).await, "Failed to display text buffer");
+    Timer::after_secs(5).await;
+
     info!("Displaying black buffer");
     buffer.fill_solid(&buffer.bounding_box(), BinaryColor::Off).unwrap();
     expect!(
@@ -82,6 +99,14 @@ async fn main(_spawner: Spawner) {
         "Failed to display buffer"
     );
     Timer::after_secs(5).await;
+
+    info!("Sleeping EPD");
+    expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
+    Timer::after_secs(2).await;
+
+    info!("Waking EPD");
+    expect!(epd.wake(&mut spi).await, "Failed to wake EPD");
+    Timer::after_secs(2).await;
 
     info!("Bypassing to old RAM");
     expect!(epd.select_ram(&mut spi, 1).await, "Failed to bypass RAM");
@@ -93,7 +118,6 @@ async fn main(_spawner: Spawner) {
     expect!(epd.update_display(&mut spi).await, "Failed to update display");
     Timer::after_secs(5).await;
 
-    info!("Sleeping EPD");
     expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     info!("Done");
 }

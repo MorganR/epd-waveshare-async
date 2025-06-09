@@ -10,6 +10,8 @@ use embedded_hal_async::{
     spi::{ErrorType as SpiErrorType, SpiBus},
 };
 
+use crate::epd2in9::RefreshMode;
+
 pub mod buffer;
 pub mod epd2in9;
 
@@ -25,14 +27,22 @@ pub trait Epd<HW>
 where
     HW: EpdHw,
 {
+    type RefreshMode;
     type Command;
     type Buffer;
 
     /// Initialise the display. This must be called before any other operations.
-    async fn init(&mut self, spi: &mut HW::Spi, lut: &[u8]) -> Result<(), HW::Error>;
+    async fn init(&mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<(), HW::Error>;
 
     /// Creates a buffer for use with this display.
     fn buffer(&self) -> Self::Buffer;
+
+    /// Sets the refresh mode for the display.
+    async fn set_refresh_mode(
+        &mut self,
+        spi: &mut HW::Spi,
+        mode: Self::RefreshMode,
+    ) -> Result<(), HW::Error>;
 
     /// Hardware reset the display. The display must be reinitialised after calling this.
     async fn reset(&mut self) -> Result<(), HW::Error>;

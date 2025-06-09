@@ -8,7 +8,7 @@ use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiBus};
 
 use crate::{
-    buffer::{binary_buffer_length, BinaryBuffer}, log::debug, Epd, EpdHw, Error
+    buffer::{binary_buffer_length, BinaryBuffer}, log::{debug, trace}, Epd, EpdHw, Error
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -26,6 +26,30 @@ pub const LUT_PARTIAL_UPDATE: [u8; 30] = [
     0x10, 0x18, 0x18, 0x08, 0x18, 0x18, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x13, 0x14, 0x44, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
+
+#[cfg(feature = "defmt")]
+#[derive(defmt::Format)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The refresh mode for the display.
+pub enum RefreshMode {
+    /// Use the full update LUT. This is slower, but should be done occasionally to avoid ghosting.
+    /// 
+    /// It's recommended to avoid full refreshes less than [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] apart,
+    /// but to do a full refresh at least every [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
+    Full,
+    /// Use the partial update LUT for fast refresh. A full refresh should be done occasionally to avoid ghosting.
+    Partial,
+}
+
+impl RefreshMode {
+    /// Returns the LUT to use for this refresh mode.
+    pub fn lut(&self) -> &[u8; 30] {
+        match self {
+            RefreshMode::Full => &LUT_FULL_UPDATE,
+            RefreshMode::Partial => &LUT_PARTIAL_UPDATE,
+        }
+    }
+}
 
 /// The height of the display (portrait orientation).
 pub const DISPLAY_HEIGHT: u16 = 296;
@@ -84,6 +108,12 @@ pub enum Command {
     Noop = 0xFF,
 }
 
+impl Command {
+    fn register(&self) -> u8 {
+        *self as u8
+    }
+}
+
 /// This should be sent with [Command::DriverOutputControl] during initialisation.
 ///
 /// From the sample code, the bytes mean the following:
@@ -94,15 +124,9 @@ pub enum Command {
 const DRIVER_OUTPUT_INIT_DATA: [u8; 3] = [0x27, 0x01, 0x00];
 /// This should be sent with [Command::BoosterSoftStartControl] during initialisation.
 /// Note: this comes from the datasheet, but doesn't match the booster data sent in the sample code.
-/// That uses [0xD7, 0xD6, 0x9D]
-// const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xD7, 0xD6, 0x9D];
+// Sample code: const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xD7, 0xD6, 0x9D];
+// Datasheet:
 const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xCF, 0xCE, 0x8D];
-
-impl Command {
-    fn register(&self) -> u8 {
-        *self as u8
-    }
-}
 
 /// Controls v1 of the 2.9" Waveshare e-paper display ([datasheet](https://files.waveshare.com/upload/e/e6/2.9inch_e-Paper_Datasheet.pdf)).
 ///
@@ -160,21 +184,16 @@ where
     HW: EpdHw,
 {
     type Command = Command;
+    type RefreshMode = RefreshMode;
     type Buffer = BinaryBuffer<
         { binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)) },
     >;
 
-    async fn init(&mut self, spi: &mut HW::Spi, lut: &[u8]) -> Result<(), HW::Error> {
-        if lut.len() != 30 {
-            Err(Error::InvalidArgument)?
-        }
-
-        // Ensure reset is high.
-        self.hw.reset().set_high()?;
-        self.hw.delay().delay_ms(200).await;
+    async fn init(&mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<(), HW::Error> {
+        // Ensure reset is high before toggling it low.
         self.reset().await?;
 
-        // Reset everything to defaults.
+        // Reset all configurations to default.
         self.send(spi, Command::SwReset, &[]).await?;
 
         self.send(spi, Command::DriverOutputControl, &DRIVER_OUTPUT_INIT_DATA)
@@ -196,7 +215,7 @@ where
         // 2us per line.
         self.send(spi, Command::SetGateLineWidth, &[0x08]).await?;
 
-        self.send(spi, Command::WriteLut, lut).await?;
+        self.send(spi, Command::WriteLut, mode.lut()).await?;
 
         Ok(())
     }
@@ -207,13 +226,23 @@ where
         )
     }
 
+    async fn set_refresh_mode(
+            &mut self,
+            spi: &mut <HW as EpdHw>::Spi,
+            mode: Self::RefreshMode,
+        ) -> Result<(), <HW as EpdHw>::Error> {
+        debug!("Changing refresh mode to {:?}", mode);
+        self.send(spi, Command::WriteLut, mode.lut())
+            .await
+    }
+
     async fn reset(&mut self) -> Result<(), HW::Error> {
         debug!("Resetting EPD");
         // Assume reset is already high.
         self.hw.reset().set_low()?;
         self.hw.delay().delay_ms(10).await;
         self.hw.reset().set_high()?;
-        self.hw.delay().delay_ms(200).await;
+        self.hw.delay().delay_ms(10).await;
         Ok(())
     }
 
@@ -226,7 +255,7 @@ where
         debug!("Waking EPD");
         self.reset().await
 
-        // TODO: is init needed?
+        // Confirmed with a physical screen that init is not required after waking.
     }
 
     async fn display_buffer(
@@ -322,7 +351,7 @@ where
         command: Command,
         data: &[u8],
     ) -> Result<(), HW::Error> {
-        debug!("Sending EPD command: {:?}", command);
+        trace!("Sending EPD command: {:?}", command);
         self.wait_if_busy().await?;
 
         self.hw.cs().set_low()?;
@@ -341,18 +370,12 @@ where
 
     async fn wait_if_busy(&mut self) -> Result<(), HW::Error> {
         let busy = self.hw.busy();
+        // Note: the datasheet suggests that busy pin is active low, i.e. we should wait for it
+        // when it's low, but this is incorrect.
         if busy.is_high().unwrap() {
-            debug!("Waiting for busy EPD");
+            trace!("Waiting for busy EPD");
             busy.wait_for_low().await?;
         }
         Ok(())
     }
 }
-
-// Notes:
-
-// Pull CS low to communicate.
-// Pull D/C low for command, then high for data.
-// Reset is active low.
-// Busy is active low, only do things when it's high.
-//
