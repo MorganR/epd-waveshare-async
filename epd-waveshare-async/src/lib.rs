@@ -81,7 +81,7 @@ where
     /// Updates (refreshes) the display based on the RAM. Note that this can be stateful. For
     /// example, on the Epd2in9 display, there are two RAM buffers. Calling this function swaps
     /// the active buffer. Consider this scenario:
-    /// 
+    ///
     /// 1. [write_image] is used to turn the RAM all white.
     /// 2. [update_display] is called, which refreshes the display to be all white.
     /// 3. [write_image] is used to turn the RAM all black.

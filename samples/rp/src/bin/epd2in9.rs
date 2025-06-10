@@ -10,7 +10,7 @@ use embassy_executor::Spawner;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals;
 use embassy_rp::spi::{self, Spi};
-use embassy_time::{Delay, Timer};
+use embassy_time::{Delay, Instant, Timer};
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::BinaryColor;
@@ -100,6 +100,7 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(4).await;
 
     info!("Displaying check buffer");
+    let before_buffer_draw = Instant::now();
     // Clear first.
     buffer
         .fill_solid(&buffer.bounding_box(), BinaryColor::On)
@@ -124,6 +125,11 @@ async fn main(_spawner: Spawner) {
         color = color.invert();
         box_size /= 2;
     }
+    let after_buffer_draw = Instant::now();
+    info!(
+        "Check buffer drawn in {} ms",
+        (after_buffer_draw - before_buffer_draw).as_millis()
+    );
     expect!(
         epd.display_buffer(&mut spi, &buffer).await,
         "Failed to display text buffer"

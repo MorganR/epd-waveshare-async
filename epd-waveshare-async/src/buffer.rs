@@ -1,4 +1,7 @@
-use core::convert::Infallible;
+use core::{
+    cmp::{max, min},
+    convert::Infallible,
+};
 
 use embedded_graphics::{
     pixelcolor::BinaryColor,
@@ -73,6 +76,7 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
     where
         I: IntoIterator<Item = Pixel<Self::Color>>,
     {
+        // Benchmarking: 60ms for checker pattern in epd2in9 sample program.
         for Pixel(point, color) in pixels.into_iter() {
             if point.x < 0
                 || point.x >= self.size.width as i32
@@ -94,94 +98,142 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
         Ok(())
     }
 
-    // TODO: Fix this or remove it, it has bugs.
-    // fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
-    // where
-    //     I: IntoIterator<Item = Self::Color>,
-    // {
-    //     let drawable_area = self.bounding_box().intersection(area);
-    //     if drawable_area.size.width == 0 || drawable_area.size.height == 0 {
-    //         return Ok(()); // Nothing to fill
-    //     }
-    //     let y_start = area.top_left.y;
-    //     let y_end = area.top_left.y + area.size.height as i32;
-    //     let x_start = area.top_left.x;
-    //     let x_end = area.top_left.x + area.size.width as i32;
-    //     let mut row_start_byte = if y_start <= 0 {
-    //         0
-    //     } else {
-    //         y_start as usize * self.bytes_per_row
-    //     };
-    //     let (x_start_byte, x_start_bit) = if x_start <= 0 {
-    //         (0, 0)
-    //     } else {
-    //         ((x_start / 8) as usize, (x_start % 8) as usize)
-    //     };
-    //     let mut colors_iterator = colors.into_iter();
-    //     for y in y_start..y_end {
-    //         let mut byte_index = x_start_byte + row_start_byte;
-    //         let mut x_bit = x_start_bit;
-    //         for x in x_start..x_end {
-    //             let Some(color) = colors_iterator.next() else {
-    //                 return Ok(()); // Stop if we run out of colors
-    //             };
-    //             if y < 0 || y >= self.size.height as i32 || x < 0 || x >= self.size.width as i32 || byte_index >= self.data.len() {
-    //                 continue; // Skip out-of-bounds pixels
-    //             }
-    //             let byte = &mut self.data[byte_index];
-    //             match color {
-    //                 BinaryColor::On => {
-    //                     *byte |= 0x80 >> x_bit;
-    //                 }
-    //                 BinaryColor::Off => {
-    //                     *byte &= !(0x80 >> x_bit);
-    //                 }
-    //             }
-    //             x_bit += 1;
-    //             if x_bit == 8 {
-    //                 // Move to the next byte
-    //                 x_bit = 0;
-    //                 byte_index += 1;
-    //             }
-    //         }
-    //         row_start_byte += self.size.width as usize;
-    //     }
+    fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Self::Color>,
+    {
+        // Benchmarking: 39ms for checker pattern in epd2in9 sample program.
+        let drawable_area = self.bounding_box().intersection(area);
+        if drawable_area.size.width == 0 || drawable_area.size.height == 0 {
+            return Ok(()); // Nothing to fill
+        }
 
-    //     Ok(())
-    // }
+        let y_start = area.top_left.y;
+        let y_end = area.top_left.y + area.size.height as i32;
+        let x_start = area.top_left.x;
+        let x_end = area.top_left.x + area.size.width as i32;
 
-    // fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
-    //     let drawable_area = self.bounding_box().intersection(area);
-    //     if drawable_area.size.width == 0 || drawable_area.size.height == 0 {
-    //         return Ok(()); // Nothing to fill
-    //     }
+        let mut colors_iter = colors.into_iter();
+        // TODO: Adjust indexes to be within bounds.
+        let mut byte_index = max(y_start, 0) as usize * self.bytes_per_row;
+        let row_start_byte_offset = max(x_start, 0) as usize / 8;
+        let row_end_byte_offset =
+            self.bytes_per_row - (min(x_end, self.size.width as i32) as usize / 8);
+        for y in y_start..y_end {
+            if y < 0 || y >= self.size.height as i32 {
+                // Skip out-of-bounds rows
+                for _ in x_start..x_end {
+                    colors_iter.next();
+                }
+                continue;
+            }
 
-    //     let y_start = drawable_area.top_left.y;
-    //     let y_end = drawable_area.top_left.y + drawable_area.size.height as i32;
-    //     let x_start = drawable_area.top_left.x;
-    //     let x_end = drawable_area.top_left.x + drawable_area.size.width as i32;
+            byte_index += row_start_byte_offset;
+            let mut bit_index = (max(x_start, 0) as usize) % 8;
 
-    //     let mut byte_index = y_start as usize * self.bytes_per_row;
-    //     for _y in y_start..y_end {
-    //         byte_index += (x_start / 8) as usize;
-    //         let mut bit_index = ((x_start as usize) % 8) as u8;
-    //         for _x in x_start..x_end {
-    //             if color == BinaryColor::On {
-    //                 self.data[byte_index] |= 0x80 >> bit_index;
-    //             } else {
-    //                 self.data[byte_index] &= !(0x80 >> bit_index);
-    //             }
-    //             bit_index += 1;
-    //             if bit_index == 8 {
-    //                 // Move to the next byte after every 8 pixels
-    //                 byte_index += 1;
-    //                 bit_index = 0;
-    //             }
-    //         }
-    //     }
+            // Y is within bounds, check X.
+            for x in x_start..x_end {
+                if x < 0 || x >= self.size.width as i32 {
+                    // Skip out-of-bounds pixels
+                    colors_iter.next();
+                    continue;
+                }
 
-    //     Ok(())
-    // }
+                // Exit if there are no more colors to apply.
+                let Some(color) = colors_iter.next() else {
+                    return Ok(());
+                };
+
+                if color == BinaryColor::On {
+                    self.data[byte_index] |= 0x80 >> bit_index;
+                } else {
+                    self.data[byte_index] &= !(0x80 >> bit_index);
+                }
+
+                bit_index += 1;
+                if bit_index == 8 {
+                    // Move to the next byte after every 8 pixels
+                    byte_index += 1;
+                    bit_index = 0;
+                }
+            }
+
+            byte_index += row_end_byte_offset;
+        }
+
+        Ok(())
+    }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        // Benchmarking: 3ms for checker pattern in epd2in9 sample program.
+        let drawable_area = self.bounding_box().intersection(area);
+        if drawable_area.size.width == 0 || drawable_area.size.height == 0 {
+            return Ok(()); // Nothing to fill
+        }
+
+        let y_start = drawable_area.top_left.y;
+        let y_end = drawable_area.top_left.y + drawable_area.size.height as i32;
+        let x_start = drawable_area.top_left.x;
+        let x_end = drawable_area.top_left.x + drawable_area.size.width as i32;
+
+        let x_full_bytes_start = min(x_start + x_start % 8, x_end);
+        let x_full_bytes_end = max(x_end - (x_end % 8), x_start);
+        let num_full_bytes_per_row = (x_full_bytes_end - x_full_bytes_start) / 8;
+
+        let mut byte_index = y_start as usize * self.bytes_per_row;
+        let row_start_byte_offset = x_start as usize / 8;
+        let row_end_byte_offset = self.bytes_per_row - (x_end as usize / 8);
+        for _y in y_start..y_end {
+            byte_index += row_start_byte_offset;
+            let mut bit_index = (x_start as usize) % 8;
+
+            macro_rules! set_next_bit {
+                () => {
+                    if color == BinaryColor::On {
+                        self.data[byte_index] |= 0x80 >> bit_index;
+                    } else {
+                        self.data[byte_index] &= !(0x80 >> bit_index);
+                    }
+                    bit_index += 1;
+                    if bit_index == 8 {
+                        // Move to the next byte after every 8 pixels
+                        byte_index += 1;
+                        bit_index = 0;
+                    }
+                };
+            }
+
+            if num_full_bytes_per_row == 0 {
+                for _x in x_start..x_end {
+                    set_next_bit!();
+                }
+            } else {
+                for _x in x_start..x_full_bytes_start {
+                    set_next_bit!();
+                }
+
+                // Fast fill for any fully covered bytes in the row.
+                for _ in 0..num_full_bytes_per_row {
+                    if color == BinaryColor::On {
+                        self.data[byte_index] = 0xFF;
+                    } else {
+                        self.data[byte_index] = 0x00;
+                    }
+                    byte_index += 1;
+                }
+
+                // Set the partially covered byte at the end of the row, if any.
+                bit_index = x_full_bytes_end as usize % 8;
+                for _x in x_full_bytes_end..x_end {
+                    set_next_bit!();
+                }
+            }
+
+            byte_index += row_end_byte_offset;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -199,19 +251,19 @@ mod tests {
         buffer
             .draw_iter([Pixel(Point::new(0, 0), BinaryColor::On)])
             .unwrap();
-        assert_eq!(buffer.data[0], 0b1);
+        assert_eq!(buffer.data[0], 0b10000000);
 
         // Draw a pixel in the center.
         buffer
             .draw_iter([Pixel(Point::new(10, 2), BinaryColor::On)])
             .unwrap();
-        assert_eq!(buffer.data[5], 0b100);
+        assert_eq!(buffer.data[5], 0b00100000);
 
         // Draw a pixel at the end.
         buffer
             .draw_iter([Pixel(Point::new(15, 3), BinaryColor::On)])
             .unwrap();
-        assert_eq!(buffer.data[7], 0b10000000);
+        assert_eq!(buffer.data[7], 0b1);
     }
 
     #[test]
@@ -231,8 +283,8 @@ mod tests {
             ])
             .unwrap();
 
-        assert_eq!(buffer.data[0], 0b00001010);
-        assert_eq!(buffer.data[2], 0b00000010);
+        assert_eq!(buffer.data[0], 0b01010000);
+        assert_eq!(buffer.data[2], 0b01000000);
     }
 
     #[test]
@@ -270,5 +322,91 @@ mod tests {
     #[should_panic]
     fn test_binary_buffer_size_must_match_dimensions() {
         let _ = BinaryBuffer::<16>::new(Size::new(16, 10));
+    }
+
+    #[test]
+    fn test_binary_buffer_fill_continguous() {
+        // 8 rows, 1 byte each.
+        const SIZE: Size = Size::new(24, 8);
+        const BUFFER_LENGTH: usize = binary_buffer_length(SIZE);
+        let mut buffer = BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE);
+
+        // Draw diagonal squares.
+        buffer
+            .fill_contiguous(
+                &Rectangle::new(Point::new(-4, -4), Size::new(8, 8)),
+                [BinaryColor::On; 8 * 8],
+            )
+            .unwrap();
+        buffer
+            .fill_contiguous(
+                // Go out of bounds to ensure it doesn't panic.
+                &Rectangle::new(Point::new(6, 2), Size::new(12, 4)),
+                [BinaryColor::On; 12 * 4],
+            )
+            .unwrap();
+        buffer
+            .fill_contiguous(
+                // Go out of bounds to ensure it doesn't panic.
+                &Rectangle::new(Point::new(20, 4), Size::new(8, 8)),
+                [BinaryColor::On; 8 * 8],
+            )
+            .unwrap();
+
+        #[rustfmt::skip]
+        let expected: [u8; 3 * 8] = [
+            0b11110000, 0b00000000, 0b00000000,
+            0b11110000, 0b00000000, 0b00000000,
+            0b11110011, 0b11111111, 0b11000000,
+            0b11110011, 0b11111111, 0b11000000,
+            0b00000011, 0b11111111, 0b11001111,
+            0b00000011, 0b11111111, 0b11001111,
+            0b00000000, 0b00000000, 0b00001111,
+            0b00000000, 0b00000000, 0b00001111,
+        ];
+        assert_eq!(buffer.data(), &expected);
+    }
+
+    #[test]
+    fn test_binary_buffer_fill_solid() {
+        // 8 rows, 1 byte each.
+        const SIZE: Size = Size::new(24, 8);
+        const BUFFER_LENGTH: usize = binary_buffer_length(SIZE);
+        let mut buffer = BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE);
+
+        // Draw diagonal squares.
+        buffer
+            .fill_solid(
+                &Rectangle::new(Point::new(-4, -4), Size::new(8, 8)),
+                BinaryColor::On,
+            )
+            .unwrap();
+        buffer
+            .fill_solid(
+                // Go out of bounds to ensure it doesn't panic.
+                &Rectangle::new(Point::new(6, 2), Size::new(12, 4)),
+                BinaryColor::On,
+            )
+            .unwrap();
+        buffer
+            .fill_solid(
+                // Go out of bounds to ensure it doesn't panic.
+                &Rectangle::new(Point::new(20, 4), Size::new(8, 8)),
+                BinaryColor::On,
+            )
+            .unwrap();
+
+        #[rustfmt::skip]
+        let expected: [u8; 3 * 8] = [
+            0b11110000, 0b00000000, 0b00000000,
+            0b11110000, 0b00000000, 0b00000000,
+            0b11110011, 0b11111111, 0b11000000,
+            0b11110011, 0b11111111, 0b11000000,
+            0b00000011, 0b11111111, 0b11001111,
+            0b00000011, 0b11111111, 0b11001111,
+            0b00000000, 0b00000000, 0b00001111,
+            0b00000000, 0b00000000, 0b00001111,
+        ];
+        assert_eq!(buffer.data(), &expected);
     }
 }

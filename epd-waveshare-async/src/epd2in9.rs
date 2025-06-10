@@ -8,7 +8,9 @@ use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiBus};
 
 use crate::{
-    buffer::{binary_buffer_length, BinaryBuffer}, log::{debug, trace}, Epd, EpdHw, Error
+    buffer::{binary_buffer_length, BinaryBuffer},
+    log::{debug, trace},
+    Epd, EpdHw, Error,
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -27,13 +29,12 @@ const LUT_PARTIAL_UPDATE: [u8; 30] = [
     0x00, 0x00, 0x00, 0x00, 0x13, 0x14, 0x44, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
-#[cfg(feature = "defmt")]
-#[derive(defmt::Format)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// The refresh mode for the display.
 pub enum RefreshMode {
     /// Use the full update LUT. This is slower, but should be done occasionally to avoid ghosting.
-    /// 
+    ///
     /// It's recommended to avoid full refreshes less than [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] apart,
     /// but to do a full refresh at least every [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
     Full,
@@ -61,8 +62,7 @@ pub const RECOMMENDED_MIN_FULL_REFRESH_INTERVAL: Duration = Duration::from_secs(
 /// It's recommended to do a full refresh at least this often.
 pub const RECOMMENDED_MAX_FULL_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
-#[cfg(feature = "defmt")]
-#[derive(defmt::Format)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     /// Used to initialise the display.
@@ -130,8 +130,8 @@ const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xD7, 0xD6, 0x9D];
 /// Datasheet:
 // const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xCF, 0xCE, 0x8D];
 
-/// Controls v1 of the 2.9" Waveshare e-paper display. 
-/// 
+/// Controls v1 of the 2.9" Waveshare e-paper display.
+///
 /// * [datasheet](https://files.waveshare.com/upload/e/e6/2.9inch_e-Paper_Datasheet.pdf)
 /// * [sample code](https://github.com/waveshareteam/e-Paper/blob/master/RaspberryPi_JetsonNano/python/lib/waveshare_epd/epd2in9.py)
 ///
@@ -178,9 +178,7 @@ where
     >;
 
     fn new_buffer(&self) -> Self::Buffer {
-        BinaryBuffer::new(
-            Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32),
-        )
+        BinaryBuffer::new(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32))
     }
 
     fn width(&self) -> u32 {
@@ -224,13 +222,12 @@ where
     }
 
     async fn set_refresh_mode(
-            &mut self,
-            spi: &mut <HW as EpdHw>::Spi,
-            mode: Self::RefreshMode,
-        ) -> Result<(), <HW as EpdHw>::Error> {
+        &mut self,
+        spi: &mut <HW as EpdHw>::Spi,
+        mode: Self::RefreshMode,
+    ) -> Result<(), <HW as EpdHw>::Error> {
         debug!("Changing refresh mode to {:?}", mode);
-        self.send(spi, Command::WriteLut, mode.lut())
-            .await
+        self.send(spi, Command::WriteLut, mode.lut()).await
     }
 
     async fn reset(&mut self) -> Result<(), HW::Error> {
@@ -290,7 +287,8 @@ where
             .await?;
 
         let (y_start_low, y_start_high) = split_low_and_high(shape.top_left.y as u16);
-        let (y_end_low, y_end_high) = split_low_and_high((shape.top_left.y + shape.size.height as i32 - 1) as u16);
+        let (y_end_low, y_end_high) =
+            split_low_and_high((shape.top_left.y + shape.size.height as i32 - 1) as u16);
         self.send(
             spi,
             Command::SetRamYStartEnd,
@@ -331,7 +329,8 @@ where
         // The INIITIAL_DISPLAY settings potentially relate to the "bypass" settings in
         // [Command::DisplayUpdateControl1], but the precise mode is unclear.
 
-        self.send(spi, Command::DisplayUpdateControl2, &[0xC4]).await?;
+        self.send(spi, Command::DisplayUpdateControl2, &[0xC4])
+            .await?;
         self.send(spi, Command::MasterActivation, &[]).await?;
         self.send(spi, Command::Noop, &[]).await?;
         Ok(())
