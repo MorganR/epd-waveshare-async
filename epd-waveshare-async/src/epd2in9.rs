@@ -14,7 +14,7 @@ use crate::{
 /// LUT for a full refresh. This should be used occasionally for best display results.
 ///
 /// See [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] and [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
-pub const LUT_FULL_UPDATE: [u8; 30] = [
+const LUT_FULL_UPDATE: [u8; 30] = [
     0x50, 0xAA, 0x55, 0xAA, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
@@ -22,7 +22,7 @@ pub const LUT_FULL_UPDATE: [u8; 30] = [
 /// perform a full refresh occasionally.
 ///
 /// See [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] and [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
-pub const LUT_PARTIAL_UPDATE: [u8; 30] = [
+const LUT_PARTIAL_UPDATE: [u8; 30] = [
     0x10, 0x18, 0x18, 0x08, 0x18, 0x18, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x13, 0x14, 0x44, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
@@ -37,7 +37,8 @@ pub enum RefreshMode {
     /// It's recommended to avoid full refreshes less than [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] apart,
     /// but to do a full refresh at least every [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
     Full,
-    /// Use the partial update LUT for fast refresh. A full refresh should be done occasionally to avoid ghosting.
+    /// Use the partial update LUT for fast refresh. A full refresh should be done occasionally to
+    /// avoid ghosting, see [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
     Partial,
 }
 
@@ -129,11 +130,12 @@ const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xD7, 0xD6, 0x9D];
 /// Datasheet:
 // const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xCF, 0xCE, 0x8D];
 
-/// Controls v1 of the 2.9" Waveshare e-paper display ([datasheet](https://files.waveshare.com/upload/e/e6/2.9inch_e-Paper_Datasheet.pdf)).
+/// Controls v1 of the 2.9" Waveshare e-paper display. 
+/// 
+/// * [datasheet](https://files.waveshare.com/upload/e/e6/2.9inch_e-Paper_Datasheet.pdf)
+/// * [sample code](https://github.com/waveshareteam/e-Paper/blob/master/RaspberryPi_JetsonNano/python/lib/waveshare_epd/epd2in9.py)
 ///
-/// Initialise the display with either [LUT_FULL_UPDATE] or [LUT_PARTIAL_UPDATE].
-///
-/// Defaults to a portrait orientation. Uses [BinaryColor], where `Off` is black and `On` is white.
+/// The display has a portrait orientation. This uses [BinaryColor], where `Off` is black and `On` is white.
 pub struct Epd2in9<HW>
 where
     HW: EpdHw,
@@ -149,34 +151,19 @@ where
         Epd2in9 { hw }
     }
 
-    /// Sets the border to the specified colour.
+    /// Sets the border to the specified colour. You need to call [Epd::update_display] using
+    /// [RefreshMode::Full] afterwards to apply this change.
     pub async fn set_border(
         &mut self,
         spi: &mut HW::Spi,
         color: BinaryColor,
     ) -> Result<(), HW::Error> {
         let border_setting: u8 = match color {
-            BinaryColor::Off => 0x40, // Ground for black
-            BinaryColor::On => 0x50,  // Set high for white
+            BinaryColor::Off => 0x00,
+            BinaryColor::On => 0x01,
         };
         self.send(spi, Command::BorderWaveformControl, &[border_setting])
             .await
-    }
-
-    /// Displays the previous image in RAM.
-    /// 
-    /// This EPD has two RAM buffers, so the last two images can be quickly switched between.
-    /// TODO: Establish a RAM enum.
-    pub async fn select_ram(
-        &mut self,
-        spi: &mut HW::Spi,
-        index: u8, // This should be an enum.
-    ) -> Result<(), HW::Error> {
-        // Options: [0x80] = enable bypass to old RAM, 0x00 = disable bypass.
-        self.send(spi, Command::DisplayUpdateControl1, &[index << 7])
-            .await?;
-
-        Ok(())
     }
 }
 
@@ -189,6 +176,20 @@ where
     type Buffer = BinaryBuffer<
         { binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)) },
     >;
+
+    fn new_buffer(&self) -> Self::Buffer {
+        BinaryBuffer::new(
+            Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32),
+        )
+    }
+
+    fn width(&self) -> u32 {
+        DISPLAY_WIDTH as u32
+    }
+
+    fn height(&self) -> u32 {
+        DISPLAY_HEIGHT as u32
+    }
 
     async fn init(&mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<(), HW::Error> {
         // Ensure reset is high before toggling it low.
@@ -210,6 +211,7 @@ where
             .await?;
 
         // Apply more magical config settings from the sample code.
+        // Potentially: configure VCOM for 7 degrees celsius?
         self.send(spi, Command::WriteVcom, &[0xA8]).await?;
         // Configure 4 dummy lines per gate.
         self.send(spi, Command::SetDummyLinePeriod, &[0x1A]).await?;
@@ -219,12 +221,6 @@ where
         self.send(spi, Command::WriteLut, mode.lut()).await?;
 
         Ok(())
-    }
-
-    fn buffer(&self) -> Self::Buffer {
-        BinaryBuffer::new(
-            Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32),
-        )
     }
 
     async fn set_refresh_mode(
@@ -293,12 +289,8 @@ where
         self.send(spi, Command::SetRamXStartEnd, &[x_start_byte, x_end_byte])
             .await?;
 
-        let y_start = shape.top_left.y;
-        let y_end = y_start + shape.size.height as i32 - 1;
-        let y_start_low = (y_start & 0xFF) as u8;
-        let y_start_high = ((y_start >> 8) & 0xFF) as u8;
-        let y_end_low = (y_end & 0xFF) as u8;
-        let y_end_high = ((y_end >> 8) & 0xFF) as u8;
+        let (y_start_low, y_start_high) = split_low_and_high(shape.top_left.y as u16);
+        let (y_end_low, y_end_high) = split_low_and_high((shape.top_left.y + shape.size.height as i32 - 1) as u16);
         self.send(
             spi,
             Command::SetRamYStartEnd,
@@ -322,17 +314,24 @@ where
         }
         self.send(spi, Command::SetRamX, &[(position.x >> 3) as u8])
             .await?;
-        let y_low = (position.y & 0xFF) as u8;
-        let y_high = ((position.y >> 8) & 0xFF) as u8;
+        let (y_low, y_high) = split_low_and_high(position.y as u16);
         self.send(spi, Command::SetRamY, &[y_low, y_high]).await?;
         Ok(())
     }
 
     async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
-        // Enable the clock and CP (?), and then display the latest data.
+        // Enable the clock and CP (?), and then display the data from the RAM. Note that there are
+        // two RAM buffers, so this will swap the active buffer. Calling this function twice in a row
+        // without writing further to RAM therefore results in displaying the previous image.
+
+        // Experimentation:
+        // * Sending just 0x04 doesn't work, it hangs in busy state. The clocks are needed.
+        // * Sending 0xC8 (INITIAL_DISPLAY) results in a black screen.
+        // * Sending 0xCD (INITIAL_DISPLAY + PATTERN_DISPLAY) results in seemingly broken, semi-random behaviour.
+        // The INIITIAL_DISPLAY settings potentially relate to the "bypass" settings in
+        // [Command::DisplayUpdateControl1], but the precise mode is unclear.
+
         self.send(spi, Command::DisplayUpdateControl2, &[0xC4]).await?;
-        // To try: just display the pattern
-        // self.send(spi, Command::DisplayUpdateControl2, &[0x04]).await?;
         self.send(spi, Command::MasterActivation, &[]).await?;
         self.send(spi, Command::Noop, &[]).await?;
         Ok(())
@@ -371,12 +370,20 @@ where
 
     async fn wait_if_busy(&mut self) -> Result<(), HW::Error> {
         let busy = self.hw.busy();
-        // Note: the datasheet suggests that busy pin is active low, i.e. we should wait for it
-        // when it's low, but this is incorrect.
+        // Note: the datasheet states that busy pin is active low, i.e. we should wait for it when
+        // it's low, but this is incorrect. The sample code treats it as active high, which works.
         if busy.is_high().unwrap() {
             trace!("Waiting for busy EPD");
             busy.wait_for_low().await?;
         }
         Ok(())
     }
+}
+
+#[inline(always)]
+/// Splits a 16-bit value into the two 8-bit values representing the low and high bytes.
+fn split_low_and_high(value: u16) -> (u8, u8) {
+    let low = (value & 0xFF) as u8;
+    let high = ((value >> 8) & 0xFF) as u8;
+    (low, high)
 }

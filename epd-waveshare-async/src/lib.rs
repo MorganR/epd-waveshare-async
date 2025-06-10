@@ -31,11 +31,15 @@ where
     type Command;
     type Buffer;
 
+    /// Creates a buffer for use with this display.
+    fn new_buffer(&self) -> Self::Buffer;
+
+    fn width(&self) -> u32;
+
+    fn height(&self) -> u32;
+
     /// Initialise the display. This must be called before any other operations.
     async fn init(&mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<(), HW::Error>;
-
-    /// Creates a buffer for use with this display.
-    fn buffer(&self) -> Self::Buffer;
 
     /// Sets the refresh mode for the display.
     async fn set_refresh_mode(
@@ -74,7 +78,15 @@ where
     /// Writes raw image data, starting at the current cursor position and auto-incrementing x then y within the current window.
     async fn write_image(&mut self, spi: &mut HW::Spi, image: &[u8]) -> Result<(), HW::Error>;
 
-    /// Updates (refreshes) the display to match the latest data that has been written to RAM.
+    /// Updates (refreshes) the display based on the RAM. Note that this can be stateful. For
+    /// example, on the Epd2in9 display, there are two RAM buffers. Calling this function swaps
+    /// the active buffer. Consider this scenario:
+    /// 
+    /// 1. [write_image] is used to turn the RAM all white.
+    /// 2. [update_display] is called, which refreshes the display to be all white.
+    /// 3. [write_image] is used to turn the RAM all black.
+    /// 4. [update_display] is called, which refreshes the display to be all black.
+    /// 5. [update_display] is called again, which refreshes the display to be all white again.
     async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), HW::Error>;
 
     /// Send the following command and data to the display. Waits until the display is no longer busy before sending.

@@ -8,8 +8,8 @@ use core::convert::Infallible;
 use defmt::{error, expect, info};
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
-use embassy_rp::spi::{self, Spi};
 use embassy_rp::peripherals;
+use embassy_rp::spi::{self, Spi};
 use embassy_time::{Delay, Timer};
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::mono_font::MonoTextStyle;
@@ -69,56 +69,66 @@ async fn main(_spawner: Spawner) {
         "Failed to initialize EPD"
     );
 
-    let mut buffer = epd.buffer();
-    buffer.fill_solid(&buffer.bounding_box(), BinaryColor::On).unwrap();
+    let mut buffer = epd.new_buffer();
+    buffer
+        .fill_solid(&buffer.bounding_box(), BinaryColor::On)
+        .unwrap();
     info!("Displaying white buffer");
     expect!(
         epd.display_buffer(&mut spi, &buffer).await,
         "Failed to display buffer"
     );
-    Timer::after_secs(5).await;
+    Timer::after_secs(4).await;
 
     info!("Changing to partial refresh mode");
-    expect!(epd.set_refresh_mode(&mut spi, RefreshMode::Partial)
-        .await, 
-        "Failed to set refresh mode");
+    expect!(
+        epd.set_refresh_mode(&mut spi, RefreshMode::Partial).await,
+        "Failed to set refresh mode"
+    );
 
     info!("Displaying text");
     let mut style = TextStyle::default();
-        style.alignment = Alignment::Left;
-        style.baseline = Baseline::Top;
-        let character_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::Off);
-        let text = Text::with_text_style("Hello, EPD!", Point::new(10, 10), character_style, style);
+    style.alignment = Alignment::Left;
+    style.baseline = Baseline::Top;
+    let character_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::Off);
+    let text = Text::with_text_style("Hello, EPD!", Point::new(10, 10), character_style, style);
     text.draw(&mut buffer).unwrap();
-    expect!(epd.display_buffer(&mut spi, &buffer).await, "Failed to display text buffer");
-    Timer::after_secs(5).await;
+    expect!(
+        epd.display_buffer(&mut spi, &buffer).await,
+        "Failed to display text buffer"
+    );
+    Timer::after_secs(4).await;
 
-    // TODO: This isn't displaying as expected.
     info!("Displaying check buffer");
     // Clear first.
-    buffer.fill_solid(&buffer.bounding_box(), BinaryColor::On).unwrap();
+    buffer
+        .fill_solid(&buffer.bounding_box(), BinaryColor::On)
+        .unwrap();
     let mut top_left = Point::new(0, 0);
-    let mut box_size = buffer.bounding_box().size.width;
+    let buffer_width = buffer.bounding_box().size.width;
+    let mut box_size = buffer_width;
     let mut color = BinaryColor::Off;
     while box_size > 0 {
-        buffer.fill_solid(&Rectangle::new(top_left, Size::new(box_size, box_size)), color).unwrap();
-        color = match color {
-            BinaryColor::On => BinaryColor::Off,
-            BinaryColor::Off => BinaryColor::On,
-        };
-        if (top_left.x + box_size as i32) >= buffer.bounding_box().size.width as i32 {
-            top_left.x = 0;
-            top_left.y += box_size as i32;
-        } else {
+        for _ in 0..(buffer_width / box_size) {
+            buffer
+                .fill_solid(
+                    &Rectangle::new(top_left, Size::new(box_size, box_size)),
+                    color,
+                )
+                .unwrap();
+            color = color.invert();
             top_left.x += box_size as i32;
         }
+        top_left.x = 0;
+        top_left.y += box_size as i32;
+        color = color.invert();
         box_size /= 2;
     }
     expect!(
         epd.display_buffer(&mut spi, &buffer).await,
-        "Failed to display buffer"
+        "Failed to display text buffer"
     );
-    Timer::after_secs(5).await;
+    Timer::after_secs(4).await;
 
     info!("Sleeping EPD");
     expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
@@ -126,17 +136,33 @@ async fn main(_spawner: Spawner) {
 
     info!("Waking EPD");
     expect!(epd.wake(&mut spi).await, "Failed to wake EPD");
-    Timer::after_secs(2).await;
+    Timer::after_secs(1).await;
 
-    info!("Bypassing to old RAM");
-    expect!(epd.select_ram(&mut spi, 1).await, "Failed to bypass RAM");
-    expect!(epd.update_display(&mut spi).await, "Failed to update display");
-    Timer::after_secs(5).await;
+    expect!(
+        epd.set_refresh_mode(&mut spi, RefreshMode::Full).await,
+        "Failed to set refresh mode"
+    );
+    info!("Setting white border");
+    expect!(
+        epd.set_border(&mut spi, BinaryColor::On).await,
+        "Failed to set border color"
+    );
+    expect!(
+        epd.update_display(&mut spi).await,
+        "Failed to update display"
+    );
+    Timer::after_secs(3).await;
 
-    info!("Back to new RAM");
-    expect!(epd.select_ram(&mut spi, 0).await, "Failed to undo RAM bypass");
-    expect!(epd.update_display(&mut spi).await, "Failed to update display");
-    Timer::after_secs(5).await;
+    info!("Setting black border");
+    expect!(
+        epd.set_border(&mut spi, BinaryColor::Off).await,
+        "Failed to set border color"
+    );
+    expect!(
+        epd.update_display(&mut spi).await,
+        "Failed to update display"
+    );
+    Timer::after_secs(3).await;
 
     expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     info!("Done");
@@ -150,7 +176,7 @@ struct DisplayHw<'a> {
     delay: Delay,
 }
 
-impl<'a> DisplayHw<'a> {
+impl DisplayHw<'_> {
     fn new(p: DisplayP) -> Self {
         let cs = Output::new(p.cs, Level::High);
         let dc = Output::new(p.dc, Level::High);
