@@ -86,9 +86,9 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
             let bit_index = (point.x as usize) % 8;
 
             if color == BinaryColor::On {
-                self.data[byte_index] |= 1 << bit_index;
+                self.data[byte_index] |= 0x80 >> bit_index;
             } else {
-                self.data[byte_index] &= !(1 << bit_index);
+                self.data[byte_index] &= !(0x80 >> bit_index);
             }
         }
         Ok(())
@@ -131,10 +131,10 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
                 let byte = &mut self.data[byte_index];
                 match color {
                     BinaryColor::On => {
-                        *byte |= 1 << x_bit;
+                        *byte |= 0x80 >> x_bit;
                     }
                     BinaryColor::Off => {
-                        *byte &= !(1 << x_bit);
+                        *byte &= !(0x80 >> x_bit);
                     }
                 }
                 x_bit += 1;
@@ -167,9 +167,9 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
             let mut bit_index = ((x_start as usize) % 8) as u8;
             for _x in x_start..x_end {
                 if color == BinaryColor::On {
-                    self.data[byte_index] |= 1 << bit_index;
+                    self.data[byte_index] |= 0x80 >> bit_index;
                 } else {
-                    self.data[byte_index] &= !(1 << bit_index);
+                    self.data[byte_index] &= !(0x80 >> bit_index);
                 }
                 bit_index += 1;
                 if bit_index == 8 {

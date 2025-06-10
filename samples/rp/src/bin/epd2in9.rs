@@ -15,6 +15,7 @@ use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle};
 use epd_waveshare_async::{
     epd2in9::{Epd2in9, RefreshMode},
@@ -92,8 +93,27 @@ async fn main(_spawner: Spawner) {
     expect!(epd.display_buffer(&mut spi, &buffer).await, "Failed to display text buffer");
     Timer::after_secs(5).await;
 
-    info!("Displaying black buffer");
-    buffer.fill_solid(&buffer.bounding_box(), BinaryColor::Off).unwrap();
+    // TODO: This isn't displaying as expected.
+    info!("Displaying check buffer");
+    // Clear first.
+    buffer.fill_solid(&buffer.bounding_box(), BinaryColor::On).unwrap();
+    let mut top_left = Point::new(0, 0);
+    let mut box_size = buffer.bounding_box().size.width;
+    let mut color = BinaryColor::Off;
+    while box_size > 0 {
+        buffer.fill_solid(&Rectangle::new(top_left, Size::new(box_size, box_size)), color).unwrap();
+        color = match color {
+            BinaryColor::On => BinaryColor::Off,
+            BinaryColor::Off => BinaryColor::On,
+        };
+        if (top_left.x + box_size as i32) >= buffer.bounding_box().size.width as i32 {
+            top_left.x = 0;
+            top_left.y += box_size as i32;
+        } else {
+            top_left.x += box_size as i32;
+        }
+        box_size /= 2;
+    }
     expect!(
         epd.display_buffer(&mut spi, &buffer).await,
         "Failed to display buffer"
@@ -185,7 +205,7 @@ impl<'a> EpdHw for DisplayHw<'a> {
 
 #[derive(Debug, ThisError)]
 enum Error {
-    #[error("Spi error: {0:?}")]
+    #[error("SPI error: {0:?}")]
     SpiError(spi::Error),
     #[error("EPD error: {0:?}")]
     EpdError(epd_waveshare_async::Error),
