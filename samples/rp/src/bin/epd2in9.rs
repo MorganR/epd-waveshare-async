@@ -6,10 +6,14 @@
 use core::convert::Infallible;
 
 use defmt::{error, expect, info};
+use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
+use embassy_embedded_hal::shared_bus::SpiDeviceError;
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals;
 use embassy_rp::spi::{self, Spi};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Instant, Timer};
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::mono_font::MonoTextStyle;
@@ -32,9 +36,9 @@ assign_resources::assign_resources! {
         rx: PIN_4,
         dma_tx: DMA_CH1,
         dma_rx: DMA_CH2,
+        cs: PIN_5,
     },
     epd_hw: DisplayP {
-        cs: PIN_5,
         reset: PIN_7,
         dc: PIN_6,
         busy: PIN_8,
@@ -52,7 +56,7 @@ async fn main(_spawner: Spawner) {
     config.phase = spi::Phase::CaptureOnFirstTransition;
     config.polarity = spi::Polarity::IdleLow;
 
-    let mut spi = Spi::new(
+    let raw_spi: Mutex<NoopRawMutex, _> = Mutex::new(Spi::new(
         resources.spi_hw.spi,
         resources.spi_hw.clk,
         resources.spi_hw.tx,
@@ -60,7 +64,10 @@ async fn main(_spawner: Spawner) {
         resources.spi_hw.dma_tx,
         resources.spi_hw.dma_rx,
         config,
-    );
+    ));
+    // CS is active low.
+    let cs_pin = Output::new(resources.spi_hw.cs, Level::High);
+    let mut spi = SpiDevice::new(&raw_spi, cs_pin);
     let mut epd = Epd2in9::new(DisplayHw::new(resources.epd_hw));
 
     info!("Initializing EPD");
@@ -175,7 +182,6 @@ async fn main(_spawner: Spawner) {
 }
 
 struct DisplayHw<'a> {
-    cs: Output<'a>,
     dc: Output<'a>,
     reset: Output<'a>,
     busy: Input<'a>,
@@ -184,13 +190,11 @@ struct DisplayHw<'a> {
 
 impl DisplayHw<'_> {
     fn new(p: DisplayP) -> Self {
-        let cs = Output::new(p.cs, Level::High);
         let dc = Output::new(p.dc, Level::High);
         let reset = Output::new(p.reset, Level::High);
         let busy = Input::new(p.busy, Pull::Up);
 
         Self {
-            cs,
             dc,
             reset,
             busy,
@@ -199,10 +203,13 @@ impl DisplayHw<'_> {
     }
 }
 
-impl<'a> EpdHw for DisplayHw<'a> {
-    type Spi = Spi<'a, peripherals::SPI0, spi::Async>;
+type RawSpiError = SpiDeviceError<spi::Error, Infallible>;
 
-    type Cs = Output<'a>;
+type EpdSpiDevice<'a> =
+    SpiDevice<'a, NoopRawMutex, Spi<'a, peripherals::SPI0, spi::Async>, Output<'a>>;
+
+impl<'a> EpdHw for DisplayHw<'a> {
+    type Spi = EpdSpiDevice<'a>;
 
     type Dc = Output<'a>;
 
@@ -213,10 +220,6 @@ impl<'a> EpdHw for DisplayHw<'a> {
     type Delay = embassy_time::Delay;
 
     type Error = Error;
-
-    fn cs(&mut self) -> &mut Self::Cs {
-        &mut self.cs
-    }
 
     fn dc(&mut self) -> &mut Self::Dc {
         &mut self.dc
@@ -238,7 +241,7 @@ impl<'a> EpdHw for DisplayHw<'a> {
 #[derive(Debug, ThisError)]
 enum Error {
     #[error("SPI error: {0:?}")]
-    SpiError(spi::Error),
+    SpiError(RawSpiError),
     #[error("EPD error: {0:?}")]
     EpdError(epd_waveshare_async::Error),
 }
@@ -249,8 +252,8 @@ impl From<Infallible> for Error {
     }
 }
 
-impl From<spi::Error> for Error {
-    fn from(e: spi::Error) -> Self {
+impl From<RawSpiError> for Error {
+    fn from(e: RawSpiError) -> Self {
         Error::SpiError(e)
     }
 }

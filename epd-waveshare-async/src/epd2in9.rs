@@ -5,7 +5,7 @@ use embedded_graphics::{
     primitives::Rectangle,
 };
 use embedded_hal::digital::{InputPin, OutputPin};
-use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiBus};
+use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
 
 use crate::{
     buffer::{binary_buffer_length, BinaryBuffer},
@@ -353,7 +353,6 @@ where
         trace!("Sending EPD command: {:?}", command);
         self.wait_if_busy().await?;
 
-        self.hw.cs().set_low()?;
         self.hw.dc().set_low()?;
         spi.write(&[command.register()]).await?;
 
@@ -361,9 +360,7 @@ where
             self.hw.dc().set_high()?;
             spi.write(data).await?;
         }
-        spi.flush().await?;
 
-        self.hw.cs().set_high()?;
         Ok(())
     }
 

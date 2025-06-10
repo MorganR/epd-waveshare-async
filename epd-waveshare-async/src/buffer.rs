@@ -312,14 +312,14 @@ impl Rotation for Rotate {
 #[derive(Clone)]
 /// Enables arbitrarily rotating an underlying [DrawTarget] buffer. This is useful if the default display
 /// orientation does not match the desired orientation of the content.
-/// 
+///
 /// ```text
 /// let default_buffer = epd.new_buffer();
 /// // If the default buffer is portrait, this would rotate it so you can draw to it as if it's in landscape mode.
 /// let rotated_buffer = RotatedBuffer::new(default_buffer, Rotate::R90);
-/// 
+///
 /// // ... Use the buffer here
-/// 
+///
 /// epd.display_buffer(&mut spi, &rotated_buffer.inner()).await?;
 /// ```
 pub struct RotatedBuffer<B: DrawTarget, R: Rotation> {

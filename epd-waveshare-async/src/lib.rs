@@ -7,7 +7,7 @@ use embedded_hal::digital::{ErrorType as PinErrorType, InputPin, OutputPin};
 use embedded_hal_async::{
     delay::DelayNs,
     digital::Wait,
-    spi::{ErrorType as SpiErrorType, SpiBus},
+    spi::{ErrorType as SpiErrorType, SpiDevice},
 };
 
 use crate::epd2in9::RefreshMode;
@@ -104,21 +104,18 @@ where
 
 /// Provides access to the hardware needed to control an EPD.
 pub trait EpdHw {
-    type Spi: SpiBus;
-    type Cs: OutputPin;
+    type Spi: SpiDevice;
     type Dc: OutputPin;
     type Reset: OutputPin;
     type Busy: InputPin + Wait;
     type Delay: DelayNs;
     type Error: CoreError
         + From<<Self::Spi as SpiErrorType>::Error>
-        + From<<Self::Cs as PinErrorType>::Error>
         + From<<Self::Dc as PinErrorType>::Error>
         + From<<Self::Reset as PinErrorType>::Error>
         + From<<Self::Busy as PinErrorType>::Error>
         + From<Error>;
 
-    fn cs(&mut self) -> &mut Self::Cs;
     fn dc(&mut self) -> &mut Self::Dc;
     fn reset(&mut self) -> &mut Self::Reset;
     fn busy(&mut self) -> &mut Self::Busy;

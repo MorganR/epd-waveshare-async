@@ -25,3 +25,4 @@ epd-waveshare-async = { path = "../../epd-waveshare-async", features = ["defmt"]
 embassy-time = { version = "0.4.0", features = ["defmt", "defmt-timestamp-uptime-s"] }
 thiserror = { version = "2.0.12", default-features = false }
 assign-resources = "0.4.1"
+embassy-sync = "0.6.2"
