@@ -1,13 +1,3 @@
-macro_rules! error {
-    ($($arg:tt)*) => {
-        #[cfg(feature = "defmt")]
-        defmt::error!($($arg)*);
-
-        #[cfg(feature = "log")]
-        log::error!($($arg)*);
-    };
-}
-
 macro_rules! debug {
     ($($arg:tt)*) => {
         #[cfg(feature = "defmt")]
@@ -28,4 +18,4 @@ macro_rules! trace {
     };
 }
 
-pub(crate) use {debug, error, trace};
+pub(crate) use {debug, trace};
