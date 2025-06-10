@@ -125,9 +125,9 @@ impl Command {
 const DRIVER_OUTPUT_INIT_DATA: [u8; 3] = [0x27, 0x01, 0x00];
 /// This should be sent with [Command::BoosterSoftStartControl] during initialisation.
 /// Note that there are two versions of this command, one in the datasheet, and one in the sample code.
-/// Sample code:
 const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xD7, 0xD6, 0x9D];
-/// Datasheet:
+// Sample code: ^
+// Datasheet:
 // const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xCF, 0xCE, 0x8D];
 
 /// Controls v1 of the 2.9" Waveshare e-paper display.
