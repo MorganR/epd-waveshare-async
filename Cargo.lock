@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "epd-waveshare-async"
-version = "0.1.0-alpha3"
+version = "0.1.0-alpha4"
 dependencies = [
  "defmt 1.0.1",
  "embedded-graphics",
@@ -1111,7 +1111,7 @@ dependencies = [
 
 [[package]]
 name = "rp-samples"
-version = "0.1.0"
+version = "0.1.0-alpha4"
 dependencies = [
  "assign-resources",
  "cortex-m",
