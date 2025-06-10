@@ -242,8 +242,6 @@ impl<'a> EpdHw for DisplayHw<'a> {
 enum Error {
     #[error("SPI error: {0:?}")]
     SpiError(RawSpiError),
-    #[error("EPD error: {0:?}")]
-    EpdError(epd_waveshare_async::Error),
 }
 
 impl From<Infallible> for Error {
@@ -255,11 +253,5 @@ impl From<Infallible> for Error {
 impl From<RawSpiError> for Error {
     fn from(e: RawSpiError) -> Self {
         Error::SpiError(e)
-    }
-}
-
-impl From<epd_waveshare_async::Error> for Error {
-    fn from(e: epd_waveshare_async::Error) -> Self {
-        Error::EpdError(e)
     }
 }

@@ -10,7 +10,7 @@ use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
 use crate::{
     buffer::{binary_buffer_length, BinaryBuffer},
     log::{debug, trace},
-    Epd, EpdHw, Error,
+    Epd, EpdHw,
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -276,11 +276,11 @@ where
         spi: &mut HW::Spi,
         shape: Rectangle,
     ) -> Result<(), <HW as EpdHw>::Error> {
+        // Use a debug assert as this is a soft failure in production; it will just lead to
+        // slightly misaligned display content.
         let x_start = shape.top_left.x;
         let x_end = x_start + shape.size.width as i32 - 1;
-        if x_start % 8 != 0 || x_end % 8 != 7 {
-            Err(Error::InvalidArgument)?
-        }
+        debug_assert!(x_start % 8 == 0 && x_end % 8 == 7, "window's top_left.x and width must be 8-bit aligned");
         let x_start_byte = ((x_start >> 3) & 0xFF) as u8;
         let x_end_byte = ((x_end >> 3) & 0xFF) as u8;
         self.send(spi, Command::SetRamXStartEnd, &[x_start_byte, x_end_byte])
@@ -307,9 +307,9 @@ where
         spi: &mut HW::Spi,
         position: Point,
     ) -> Result<(), <HW as EpdHw>::Error> {
-        if position.x % 8 != 0 {
-            Err(Error::InvalidArgument)?
-        }
+        // Use a debug assert as this is a soft failure in production; it will just lead to
+        // slightly misaligned display content.
+        debug_assert_eq!(position.x % 8, 0, "position.x must be 8-bit aligned");
         self.send(spi, Command::SetRamX, &[(position.x >> 3) as u8])
             .await?;
         let (y_low, y_high) = split_low_and_high(position.y as u16);

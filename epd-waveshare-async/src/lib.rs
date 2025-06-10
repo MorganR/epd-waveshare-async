@@ -17,11 +17,6 @@ pub mod epd2in9;
 
 mod log;
 
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum Error {
-    InvalidArgument,
-}
-
 #[allow(async_fn_in_trait)]
 pub trait Epd<HW>
 where
@@ -113,8 +108,7 @@ pub trait EpdHw {
         + From<<Self::Spi as SpiErrorType>::Error>
         + From<<Self::Dc as PinErrorType>::Error>
         + From<<Self::Reset as PinErrorType>::Error>
-        + From<<Self::Busy as PinErrorType>::Error>
-        + From<Error>;
+        + From<<Self::Busy as PinErrorType>::Error>;
 
     fn dc(&mut self) -> &mut Self::Dc;
     fn reset(&mut self) -> &mut Self::Reset;
