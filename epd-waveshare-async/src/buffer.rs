@@ -238,68 +238,79 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
 }
 
 pub trait Rotation {
-    /// Returns the inverse rotation type.
+    /// Returns the inverse rotation that reverses this rotation's effect.
     fn inverse(&self) -> Self;
 
     /// Rotates the given size according to this rotation type.
     fn rotate_size(&self, size: Size) -> Size;
 
-    /// Rotates a point according to this rotation type, within overall bounds of the given size.
+    /// Rotates a point according to this rotation type, within overall source bounds of the given size.
+    ///
+    /// For example, if the given `point` is (1,2) from a 10x20 space, then [Rotate::Degrees90] would
+    /// return (17, 1) in a 20x10 space. `bounds` should be the source dimensions of 10x20.
+    ///
+    /// ```rust
+    /// # use embedded_graphics::prelude::{Point, Size};
+    /// # use epd_waveshare_async::buffer::{Rotate, Rotation};
+    ///
+    /// let r = Rotate::Degrees90;
+    /// assert_eq!(r.rotate_point(Point::new(1, 2), Size::new(10, 20)), Point::new(17, 1));
+    /// ```
     fn rotate_point(&self, point: Point, bounds: Size) -> Point;
 
-    /// Rotates a rectangle according to this rotation type, within overall bounds of the given size.
+    /// Rotates a rectangle according to this rotation type, within overall source bounds of the given size.
     fn rotate_rectangle(&self, rectangle: Rectangle, bounds: Size) -> Rectangle;
 }
 
 /// Represents a 90, 180, or 270 degree rotation of a point within a given size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rotate {
-    R90,
-    R180,
-    R270,
+    Degrees90,
+    Degrees180,
+    Degrees270,
 }
 
 impl Rotation for Rotate {
     fn inverse(&self) -> Self {
         match self {
-            Rotate::R90 => Rotate::R270,
-            Rotate::R180 => Rotate::R180,
-            Rotate::R270 => Rotate::R90,
+            Rotate::Degrees90 => Rotate::Degrees270,
+            Rotate::Degrees180 => Rotate::Degrees180,
+            Rotate::Degrees270 => Rotate::Degrees90,
         }
     }
 
     fn rotate_size(&self, size: Size) -> Size {
         match self {
-            Rotate::R90 | Rotate::R270 => Size::new(size.height, size.width),
-            Rotate::R180 => size,
+            Rotate::Degrees90 | Rotate::Degrees270 => Size::new(size.height, size.width),
+            Rotate::Degrees180 => size,
         }
     }
 
     fn rotate_point(&self, point: Point, source_bounds: Size) -> Point {
         match self {
-            Rotate::R90 => Point::new(source_bounds.height as i32 - point.y - 1, point.x),
-            Rotate::R180 => Point::new(
+            Rotate::Degrees90 => Point::new(source_bounds.height as i32 - point.y - 1, point.x),
+            Rotate::Degrees180 => Point::new(
                 source_bounds.width as i32 - point.x - 1,
                 source_bounds.height as i32 - point.y - 1,
             ),
-            Rotate::R270 => Point::new(point.y, source_bounds.width as i32 - point.x - 1),
+            Rotate::Degrees270 => Point::new(point.y, source_bounds.width as i32 - point.x - 1),
         }
     }
 
     fn rotate_rectangle(&self, rectangle: Rectangle, source_bounds: Size) -> Rectangle {
         match self {
-            Rotate::R90 => {
+            Rotate::Degrees90 => {
                 let old_bottom_left =
                     rectangle.top_left + Point::new(0, rectangle.size.height as i32 - 1);
                 let new_top_left = self.rotate_point(old_bottom_left, source_bounds);
                 Rectangle::new(new_top_left, self.rotate_size(rectangle.size))
             }
-            Rotate::R180 => {
+            Rotate::Degrees180 => {
                 let old_bottom_right = rectangle.top_left + rectangle.size - Point::new(1, 1);
                 let new_top_left = self.rotate_point(old_bottom_right, source_bounds);
                 Rectangle::new(new_top_left, self.rotate_size(rectangle.size))
             }
-            Rotate::R270 => {
+            Rotate::Degrees270 => {
                 let old_top_right =
                     rectangle.top_left + Point::new(rectangle.size.width as i32 - 1, 0);
                 let new_top_left = self.rotate_point(old_top_right, source_bounds);
@@ -309,41 +320,50 @@ impl Rotation for Rotate {
     }
 }
 
-#[derive(Clone)]
 /// Enables arbitrarily rotating an underlying [DrawTarget] buffer. This is useful if the default display
 /// orientation does not match the desired orientation of the content.
 ///
 /// ```text
-/// let default_buffer = epd.new_buffer();
+/// let mut default_buffer = epd.new_buffer();
 /// // If the default buffer is portrait, this would rotate it so you can draw to it as if it's in landscape mode.
-/// let rotated_buffer = RotatedBuffer::new(default_buffer, Rotate::R90);
+/// let rotated_buffer = RotatedBuffer::new(&mut default_buffer, Rotate::Degrees90);
 ///
 /// // ... Use the buffer here
 ///
-/// epd.display_buffer(&mut spi, &rotated_buffer.inner()).await?;
+/// epd.display_buffer(&mut spi, rotated_buffer.inner()).await?;
 /// ```
 pub struct RotatedBuffer<B: DrawTarget, R: Rotation> {
+    bounds: Rectangle,
     buffer: B,
     rotation: R,
 }
 
 impl<B: DrawTarget, R: Rotation> RotatedBuffer<B, R> {
     pub fn new(buffer: B, rotation: R) -> Self {
-        Self { buffer, rotation }
+        let inverse_rotation = rotation.inverse();
+        let inner_bounds = buffer.bounding_box();
+        let bounds = inverse_rotation.rotate_rectangle(inner_bounds, inner_bounds.size);
+        Self {
+            bounds,
+            buffer,
+            rotation,
+        }
     }
 
-    /// Access the inner buffer.
-    pub fn inner(&self) -> &B {
+    /// Provides read-only access to the inner buffer.
+    pub fn inner(&mut self) -> &B {
         &self.buffer
+    }
+
+    /// Drops this rotated buffer wrapper and takes out the inner buffer.
+    pub fn take_inner(self) -> B {
+        self.buffer
     }
 }
 
 impl<B: DrawTarget, R: Rotation> Dimensions for RotatedBuffer<B, R> {
     fn bounding_box(&self) -> Rectangle {
-        let internal = self.buffer.bounding_box();
-        self.rotation
-            .inverse()
-            .rotate_rectangle(internal, internal.size)
+        self.bounds
     }
 }
 
@@ -355,12 +375,8 @@ impl<B: DrawTarget, R: Rotation> DrawTarget for RotatedBuffer<B, R> {
     where
         I: IntoIterator<Item = Pixel<Self::Color>>,
     {
-        let source_bounds = self
-            .rotation
-            .inverse()
-            .rotate_size(self.buffer.bounding_box().size);
         let rotated_pixels = pixels.into_iter().map(|Pixel(point, color)| {
-            let rotated_point = self.rotation.rotate_point(point, source_bounds);
+            let rotated_point = self.rotation.rotate_point(point, self.bounds.size);
             Pixel(rotated_point, color)
         });
         self.buffer.draw_iter(rotated_pixels)
@@ -546,22 +562,28 @@ mod tests {
         const SIZE: Size = Size::new(8, 24);
         const BUFFER_LENGTH: usize = binary_buffer_length(SIZE);
 
-        let mut rotated_buffer =
-            RotatedBuffer::new(BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE), Rotate::R90);
+        let mut rotated_buffer = RotatedBuffer::new(
+            BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE),
+            Rotate::Degrees90,
+        );
         assert_eq!(
             rotated_buffer.bounding_box(),
             Rectangle::new(Point::new(0, 0), Size::new(24, 8))
         );
 
-        rotated_buffer =
-            RotatedBuffer::new(BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE), Rotate::R180);
+        rotated_buffer = RotatedBuffer::new(
+            BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE),
+            Rotate::Degrees180,
+        );
         assert_eq!(
             rotated_buffer.bounding_box(),
             Rectangle::new(Point::new(0, 0), Size::new(8, 24))
         );
 
-        rotated_buffer =
-            RotatedBuffer::new(BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE), Rotate::R270);
+        rotated_buffer = RotatedBuffer::new(
+            BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE),
+            Rotate::Degrees270,
+        );
         assert_eq!(
             rotated_buffer.bounding_box(),
             Rectangle::new(Point::new(0, 0), Size::new(24, 8))
@@ -573,8 +595,10 @@ mod tests {
         const SIZE: Size = Size::new(8, 4);
         const BUFFER_LENGTH: usize = binary_buffer_length(SIZE);
 
-        let mut rotated_buffer =
-            RotatedBuffer::new(BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE), Rotate::R90);
+        let mut rotated_buffer = RotatedBuffer::new(
+            BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE),
+            Rotate::Degrees90,
+        );
         rotated_buffer
             .draw_iter([
                 Pixel(Point::new(-1, -1), BinaryColor::On), // Should be ignored.
@@ -592,8 +616,10 @@ mod tests {
             ];
         assert_eq!(rotated_buffer.inner().data(), &expected);
 
-        rotated_buffer =
-            RotatedBuffer::new(BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE), Rotate::R180);
+        rotated_buffer = RotatedBuffer::new(
+            BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE),
+            Rotate::Degrees180,
+        );
         rotated_buffer
             .draw_iter([
                 Pixel(Point::new(-1, -1), BinaryColor::On), // Should be ignored.
@@ -611,8 +637,10 @@ mod tests {
             ];
         assert_eq!(rotated_buffer.inner().data(), &expected);
 
-        rotated_buffer =
-            RotatedBuffer::new(BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE), Rotate::R270);
+        rotated_buffer = RotatedBuffer::new(
+            BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE),
+            Rotate::Degrees270,
+        );
         rotated_buffer
             .draw_iter([
                 Pixel(Point::new(-1, -1), BinaryColor::On), // Should be ignored.
@@ -638,7 +666,7 @@ mod tests {
         const BUFFER_LENGTH: usize = binary_buffer_length(SIZE);
         let buffer = BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE);
 
-        let mut rotated_buffer = RotatedBuffer::new(buffer.clone(), Rotate::R90);
+        let mut rotated_buffer = RotatedBuffer::new(buffer.clone(), Rotate::Degrees90);
         rotated_buffer
             .fill_contiguous(
                 &Rectangle::new(Point::new(-4, -4), Size::new(8, 8)),
@@ -657,7 +685,7 @@ mod tests {
         ];
         assert_eq!(rotated_buffer.inner().data(), &expected);
 
-        rotated_buffer = RotatedBuffer::new(buffer.clone(), Rotate::R180);
+        rotated_buffer = RotatedBuffer::new(buffer.clone(), Rotate::Degrees180);
         rotated_buffer
             .fill_contiguous(
                 &Rectangle::new(Point::new(-4, -4), Size::new(8, 8)),
@@ -676,7 +704,7 @@ mod tests {
         ];
         assert_eq!(rotated_buffer.inner().data(), &expected);
 
-        rotated_buffer = RotatedBuffer::new(buffer.clone(), Rotate::R270);
+        rotated_buffer = RotatedBuffer::new(buffer.clone(), Rotate::Degrees270);
         rotated_buffer
             .fill_contiguous(
                 &Rectangle::new(Point::new(-4, -4), Size::new(8, 8)),
@@ -703,7 +731,7 @@ mod tests {
         const BUFFER_LENGTH: usize = binary_buffer_length(SIZE);
         let buffer = BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE);
 
-        let mut rotated_buffer = RotatedBuffer::new(buffer.clone(), Rotate::R90);
+        let mut rotated_buffer = RotatedBuffer::new(buffer.clone(), Rotate::Degrees90);
         rotated_buffer
             .fill_solid(
                 &Rectangle::new(Point::new(-4, -4), Size::new(8, 8)),
@@ -722,7 +750,7 @@ mod tests {
         ];
         assert_eq!(rotated_buffer.inner().data(), &expected);
 
-        rotated_buffer = RotatedBuffer::new(buffer.clone(), Rotate::R180);
+        rotated_buffer = RotatedBuffer::new(buffer.clone(), Rotate::Degrees180);
         rotated_buffer
             .fill_solid(
                 &Rectangle::new(Point::new(-4, -4), Size::new(8, 8)),
@@ -741,7 +769,7 @@ mod tests {
         ];
         assert_eq!(rotated_buffer.inner().data(), &expected);
 
-        rotated_buffer = RotatedBuffer::new(buffer.clone(), Rotate::R270);
+        rotated_buffer = RotatedBuffer::new(buffer.clone(), Rotate::Degrees270);
         rotated_buffer
             .fill_solid(
                 &Rectangle::new(Point::new(-4, -4), Size::new(8, 8)),
@@ -763,19 +791,19 @@ mod tests {
 
     #[test]
     fn test_rotate_near_corner() {
-        let mut r = Rotate::R90;
+        let mut r = Rotate::Degrees90;
         // (1,1) in [10, 20] becomes (18, 1) in [20, 10].
         assert_eq!(
             Point::new(18, 1),
             r.rotate_point(Point::new(1, 1), Size::new(10, 20))
         );
-        r = Rotate::R180;
+        r = Rotate::Degrees180;
         // (1,1) in [10, 20] becomes (8, 18) in [10, 20].
         assert_eq!(
             Point::new(8, 18),
             r.rotate_point(Point::new(1, 1), Size::new(10, 20))
         );
-        r = Rotate::R270;
+        r = Rotate::Degrees270;
         // (1,1) in [10, 20] becomes (1, 8) in [20, 10].
         assert_eq!(
             Point::new(1, 8),
@@ -785,17 +813,17 @@ mod tests {
 
     #[test]
     fn test_rotate_centre() {
-        let mut r = Rotate::R90;
+        let mut r = Rotate::Degrees90;
         assert_eq!(
             Point::new(2, 2),
             r.rotate_point(Point::new(2, 2), Size::new(5, 5))
         );
-        r = Rotate::R180;
+        r = Rotate::Degrees180;
         assert_eq!(
             Point::new(2, 2),
             r.rotate_point(Point::new(2, 2), Size::new(5, 5))
         );
-        r = Rotate::R270;
+        r = Rotate::Degrees270;
         assert_eq!(
             Point::new(2, 2),
             r.rotate_point(Point::new(2, 2), Size::new(5, 5))
@@ -804,17 +832,17 @@ mod tests {
 
     #[test]
     fn test_rotate_size() {
-        let mut r = Rotate::R90;
+        let mut r = Rotate::Degrees90;
         assert_eq!(Size::new(5, 10), r.rotate_size(Size::new(10, 5)));
-        r = Rotate::R180;
+        r = Rotate::Degrees180;
         assert_eq!(Size::new(10, 5), r.rotate_size(Size::new(10, 5)));
-        r = Rotate::R270;
+        r = Rotate::Degrees270;
         assert_eq!(Size::new(5, 10), r.rotate_size(Size::new(10, 5)));
     }
 
     #[test]
     fn test_rotate_rectangle() {
-        let mut r = Rotate::R90;
+        let mut r = Rotate::Degrees90;
         let rect = Rectangle::new(Point::new(1, 1), Size::new(3, 2));
         // Assume we're rotating _into_ an 8x4 destination buffer.
         let _dest_bounds = Size::new(8, 4);
@@ -825,7 +853,7 @@ mod tests {
         assert_eq!(rotated.top_left, Point::new(5, 1));
         assert_eq!(rotated.size, Size::new(2, 3));
 
-        r = Rotate::R180;
+        r = Rotate::Degrees180;
         source_bounds = Size::new(8, 4);
         let rotated = r.rotate_rectangle(rect, source_bounds);
         // (1, 1) in [8, 4] becomes (6, 2) in [8, 4].
@@ -833,7 +861,7 @@ mod tests {
         assert_eq!(rotated.top_left, Point::new(4, 1));
         assert_eq!(rotated.size, Size::new(3, 2));
 
-        r = Rotate::R270;
+        r = Rotate::Degrees270;
         source_bounds = Size::new(4, 8);
         let rotated = r.rotate_rectangle(rect, source_bounds);
         // (1, 1) in [4, 8] becomes (1, 2) in [8, 4].

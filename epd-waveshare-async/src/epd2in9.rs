@@ -4,7 +4,10 @@ use embedded_graphics::{
     prelude::{Dimensions, Point, Size},
     primitives::Rectangle,
 };
-use embedded_hal::digital::{InputPin, OutputPin};
+use embedded_hal::{
+    digital::{InputPin, OutputPin},
+    spi::{Phase, Polarity},
+};
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
 
 use crate::{
@@ -61,6 +64,13 @@ pub const DISPLAY_WIDTH: u16 = 128;
 pub const RECOMMENDED_MIN_FULL_REFRESH_INTERVAL: Duration = Duration::from_secs(180);
 /// It's recommended to do a full refresh at least this often.
 pub const RECOMMENDED_MAX_FULL_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+pub const RECOMMENDED_SPI_HZ: u32 = 4_000_000; // 4 MHz
+/// Use this phase in conjunction with [RECOMMENDED_SPI_POLARITY] so that the EPD can capture data
+/// on the rising edge.
+pub const RECOMMENDED_SPI_PHASE: Phase = Phase::CaptureOnFirstTransition;
+/// Use this polarity in conjunction with [RECOMMENDED_SPI_PHASE] so that the EPD can capture data
+/// on the rising edge.
+pub const RECOMMENDED_SPI_POLARITY: Polarity = Polarity::IdleLow;
 
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,11 +90,11 @@ pub enum Command {
     /// Activates the display update sequence. This must be set beforehand using [DisplayUpdateControl2].
     /// This operation must not be interrupted.
     MasterActivation = 0x20,
-    /// Can be used to bypass the RAM content and directly read 1 or 0 for all pixels.
+    /// Used for a RAM "bypass" mode, though the precise meaning is unclear.
     DisplayUpdateControl1 = 0x21,
     /// Configures the display update sequence for use with [MasterActivation].
     DisplayUpdateControl2 = 0x22,
-    /// Writes data to RAM, autoincrementing the address counter.
+    /// Writes data to RAM, auto-incrementing the address counter.
     WriteRam = 0x24,
     /// Writes to the VCOM register.
     WriteVcom = 0x2C,
@@ -95,13 +105,14 @@ pub enum Command {
     /// ? Part of magic config.
     SetGateLineWidth = 0x3B,
     /// Register to configure the behaviour of the border.
-    /// This can be set directly to a fixed colour, or managed via the VCOM register.
     BorderWaveformControl = 0x3C,
-    /// Sets the start and end positions of the X axis.
+    /// Sets the start and end positions of the X axis for the auto-incrementing address counter.
+    /// Note that the x position can only be configured as a multiple of 8.
     SetRamXStartEnd = 0x44,
-    /// Sets the start and end positions of the Y axis.
+    /// Sets the start and end positions of the Y axis for the auto-incrementing address counter.
     SetRamYStartEnd = 0x45,
     /// Sets the current x coordinate of the address counter.
+    /// Note that the x position can only be configured as a multiple of 8.
     SetRamX = 0x4E,
     /// Sets the current y coordinate of the address counter.
     SetRamY = 0x4F,
@@ -110,6 +121,7 @@ pub enum Command {
 }
 
 impl Command {
+    /// Returns the register address for this command.
     fn register(&self) -> u8 {
         *self as u8
     }
@@ -136,19 +148,19 @@ const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xD7, 0xD6, 0x9D];
 /// * [sample code](https://github.com/waveshareteam/e-Paper/blob/master/RaspberryPi_JetsonNano/python/lib/waveshare_epd/epd2in9.py)
 ///
 /// The display has a portrait orientation. This uses [BinaryColor], where `Off` is black and `On` is white.
-pub struct Epd2in9<HW>
+pub struct Epd2In9<HW>
 where
     HW: EpdHw,
 {
     hw: HW,
 }
 
-impl<HW> Epd2in9<HW>
+impl<HW> Epd2In9<HW>
 where
     HW: EpdHw,
 {
     pub fn new(hw: HW) -> Self {
-        Epd2in9 { hw }
+        Epd2In9 { hw }
     }
 
     /// Sets the border to the specified colour. You need to call [Epd::update_display] using
@@ -165,13 +177,47 @@ where
         self.send(spi, Command::BorderWaveformControl, &[border_setting])
             .await
     }
+
+    /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
+    async fn send(
+        &mut self,
+        spi: &mut HW::Spi,
+        command: Command,
+        data: &[u8],
+    ) -> Result<(), HW::Error> {
+        trace!("Sending EPD command: {:?}", command);
+        self.wait_if_busy().await?;
+
+        self.hw.dc().set_low()?;
+        spi.write(&[command.register()]).await?;
+
+        if !data.is_empty() {
+            self.hw.dc().set_high()?;
+            spi.write(data).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Waits for the current operation to complete if the display is busy.
+    ///
+    /// Note that this will wait forever if the display is asleep.
+    async fn wait_if_busy(&mut self) -> Result<(), HW::Error> {
+        let busy = self.hw.busy();
+        // Note: the datasheet states that busy pin is active low, i.e. we should wait for it when
+        // it's low, but this is incorrect. The sample code treats it as active high, which works.
+        if busy.is_high().unwrap() {
+            trace!("Waiting for busy EPD");
+            busy.wait_for_low().await?;
+        }
+        Ok(())
+    }
 }
 
-impl<HW> Epd<HW> for Epd2in9<HW>
+impl<HW> Epd<HW> for Epd2In9<HW>
 where
     HW: EpdHw,
 {
-    type Command = Command;
     type RefreshMode = RefreshMode;
     type Buffer = BinaryBuffer<
         { binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)) },
@@ -280,7 +326,10 @@ where
         // slightly misaligned display content.
         let x_start = shape.top_left.x;
         let x_end = x_start + shape.size.width as i32 - 1;
-        debug_assert!(x_start % 8 == 0 && x_end % 8 == 7, "window's top_left.x and width must be 8-bit aligned");
+        debug_assert!(
+            x_start % 8 == 0 && x_end % 8 == 7,
+            "window's top_left.x and width must be 8-bit aligned"
+        );
         let x_start_byte = ((x_start >> 3) & 0xFF) as u8;
         let x_end_byte = ((x_end >> 3) & 0xFF) as u8;
         self.send(spi, Command::SetRamXStartEnd, &[x_start_byte, x_end_byte])
@@ -342,37 +391,6 @@ where
         image: &[u8],
     ) -> Result<(), <HW as EpdHw>::Error> {
         self.send(spi, Command::WriteRam, image).await
-    }
-
-    async fn send(
-        &mut self,
-        spi: &mut HW::Spi,
-        command: Command,
-        data: &[u8],
-    ) -> Result<(), HW::Error> {
-        trace!("Sending EPD command: {:?}", command);
-        self.wait_if_busy().await?;
-
-        self.hw.dc().set_low()?;
-        spi.write(&[command.register()]).await?;
-
-        if !data.is_empty() {
-            self.hw.dc().set_high()?;
-            spi.write(data).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn wait_if_busy(&mut self) -> Result<(), HW::Error> {
-        let busy = self.hw.busy();
-        // Note: the datasheet states that busy pin is active low, i.e. we should wait for it when
-        // it's low, but this is incorrect. The sample code treats it as active high, which works.
-        if busy.is_high().unwrap() {
-            trace!("Waiting for busy EPD");
-            busy.wait_for_low().await?;
-        }
-        Ok(())
     }
 }
 

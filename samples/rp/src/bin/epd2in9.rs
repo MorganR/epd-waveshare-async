@@ -22,7 +22,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle};
 use epd_waveshare_async::{
-    epd2in9::{Epd2in9, RefreshMode},
+    epd2in9::{Epd2In9, RefreshMode},
     Epd, EpdHw,
 };
 use thiserror::Error as ThisError;
@@ -68,7 +68,7 @@ async fn main(_spawner: Spawner) {
     // CS is active low.
     let cs_pin = Output::new(resources.spi_hw.cs, Level::High);
     let mut spi = SpiDevice::new(&raw_spi, cs_pin);
-    let mut epd = Epd2in9::new(DisplayHw::new(resources.epd_hw));
+    let mut epd = Epd2In9::new(DisplayHw::new(resources.epd_hw));
 
     info!("Initializing EPD");
     expect!(

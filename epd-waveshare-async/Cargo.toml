@@ -1,5 +1,6 @@
 [package]
 name = "epd-waveshare-async"
+keywords = ["embedded", "async", "e-paper", "waveshare", "display"]
 description = "Async drivers for Waveshare's e-paper displays."
 authors.workspace = true
 version.workspace = true
