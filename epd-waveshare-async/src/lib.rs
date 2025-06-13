@@ -87,6 +87,76 @@ where
 }
 
 /// Provides access to the hardware needed to control an EPD.
+///
+/// This greatly simplifies the generics needed by the `Epd` trait and implementing types at the cost of implementing this trait.
+///
+/// In this example, we make the EPD generic over just the SPI type, but can drop generics for the pins and delay type.
+///
+/// ```rust
+/// use core::convert::Infallible;
+///
+/// use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
+/// use embassy_embedded_hal::shared_bus::SpiDeviceError;
+/// use embassy_rp::gpio::{Input, Output};
+/// use embassy_rp::spi::{self, Spi};
+/// use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+/// use embassy_time::Delay;
+/// use epd_waveshare_async::EpdHw;
+/// use thiserror::Error as ThisError;
+///
+/// /// Define an error type that can convert from the SPI and GPIO errors.
+/// #[derive(Debug, ThisError)]
+/// enum Error {
+///   #[error("SPI error: {0:?}")]
+///   SpiError(SpiDeviceError<spi::Error, Infallible>),
+/// }
+///
+/// impl From<Infallible> for Error {
+///     fn from(_: Infallible) -> Self {
+///         // GPIO errors are infallible, i.e. they can't occur, so this should be unreachable.
+///         unreachable!()
+///     }
+/// }
+///
+/// impl From<SpiDeviceError<spi::Error, Infallible>> for Error {
+///     fn from(e: SpiDeviceError<spi::Error, Infallible>) -> Self {
+///         Error::SpiError(e)
+///     }
+/// }
+///
+/// struct RpEpdHw<'a, SPI: spi::Instance + 'a> {
+///     dc: Output<'a>,
+///     reset: Output<'a>,
+///     busy: Input<'a>,
+///     delay: Delay,
+///     _phantom: core::marker::PhantomData<SPI>,
+/// }
+///
+/// impl <'a, SPI: spi::Instance + 'a> EpdHw for RpEpdHw<'a, SPI> {
+///     type Spi = SpiDevice<'a, CriticalSectionRawMutex, Spi<'a, SPI, spi::Async>, Output<'a>>;
+///     type Dc = Output<'a>;
+///     type Reset = Output<'a>;
+///     type Busy = Input<'a>;
+///     type Delay = Delay;
+///     type Error = Error;
+///
+///     fn dc(&mut self) -> &mut Self::Dc {
+///       &mut self.dc
+///     }
+///
+///     fn reset(&mut self) -> &mut Self::Reset {
+///       &mut self.reset
+///     }
+///
+///     fn busy(&mut self) -> &mut Self::Busy {
+///       &mut self.busy
+///     }
+///
+///     fn delay(&mut self) -> &mut Self::Delay {
+///       &mut self.delay
+///     }
+/// }
+/// ```
 pub trait EpdHw {
     type Spi: SpiDevice;
     type Dc: OutputPin;

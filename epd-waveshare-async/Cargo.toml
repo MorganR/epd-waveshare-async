@@ -14,6 +14,13 @@ embedded-hal.workspace = true
 embedded-hal-async.workspace = true
 log = { version = "0.4.27", optional = true }
 
+[dev-dependencies]
+embassy-embedded-hal = { workspace = true, features = ["defmt"] }
+embassy-rp = { workspace = true, features = ["chrono", "defmt", "unstable-pac", "time-driver", "critical-section-impl", "boot2-w25q080", "rp2040", "rom-v2-intrinsics"] }
+embassy-sync.workspace = true
+embassy-time = { workspace = true, features = ["defmt", "defmt-timestamp-uptime-s"] }
+thiserror = { workspace = true, default-features = false }
+
 [features]
 default = []
 defmt = ["dep:defmt"]
