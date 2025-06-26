@@ -8,6 +8,10 @@ This is inspired by both the existing (sync) [epd-waveshare](https://github.com/
 
 To start, this library will only support the display(s) I am actively testing with it. Once in a stable state, contributions for more displays will be welcome.
 
+## Samples
+
+Sample code should exist for each display driver, to both demonstrate its use and to act as a test case that can be easily run. These live in the `samples` folder, with one subfolder per microcontroller. A sample just needs to be provided for at least one microcontroller per display driver.
+
 ## Developing
 
 ### Set up
