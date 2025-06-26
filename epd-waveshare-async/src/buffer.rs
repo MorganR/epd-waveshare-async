@@ -104,9 +104,11 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
         I: IntoIterator<Item = Self::Color>,
     {
         // Benchmarking: 39ms for checker pattern in epd2in9 sample program.
-        let drawable_area = self.bounding_box().intersection(area);
-        if drawable_area.size.width == 0 || drawable_area.size.height == 0 {
-            return Ok(()); // Nothing to fill
+        {
+            let drawable_area = self.bounding_box().intersection(area);
+            if drawable_area.size.width == 0 || drawable_area.size.height == 0 {
+                return Ok(()); // Nothing to fill
+            }
         }
 
         let y_start = area.top_left.y;
@@ -115,7 +117,6 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
         let x_end = area.top_left.x + area.size.width as i32;
 
         let mut colors_iter = colors.into_iter();
-        // TODO: Adjust indexes to be within bounds.
         let mut byte_index = max(y_start, 0) as usize * self.bytes_per_row;
         let row_start_byte_offset = max(x_start, 0) as usize / 8;
         let row_end_byte_offset =
@@ -188,6 +189,8 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
             byte_index += row_start_byte_offset;
             let mut bit_index = (x_start as usize) % 8;
 
+            /// Sets the next bit from `color` and advances `bit_index` and `byte_index`
+            /// appropriately.
             macro_rules! set_next_bit {
                 () => {
                     if color == BinaryColor::On {
@@ -205,10 +208,12 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
             }
 
             if num_full_bytes_per_row == 0 {
+                // There are no full bytes in this row, so just set colors bitwise.
                 for _x in x_start..x_end {
                     set_next_bit!();
                 }
             } else {
+                // Set colors bitwise in the first byte if it's not byte-aligned.
                 for _x in x_start..x_full_bytes_start {
                     set_next_bit!();
                 }
@@ -262,7 +267,7 @@ pub trait Rotation {
     fn rotate_rectangle(&self, rectangle: Rectangle, bounds: Size) -> Rectangle;
 }
 
-/// Represents a 90, 180, or 270 degree rotation of a point within a given size.
+/// Represents a 90, 180, or 270 degree clockwise rotation of a point within a given size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rotate {
     Degrees90,
