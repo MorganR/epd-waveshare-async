@@ -10,9 +10,10 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Morgan Roff"]
-version = "0.1.1"
+version = "0.1.2-alpha"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+readme = "README.md"
 
 [profile.release]
 debug = 2
