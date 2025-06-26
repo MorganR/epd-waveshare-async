@@ -326,6 +326,12 @@ where
         // slightly misaligned display content.
         let x_start = shape.top_left.x;
         let x_end = x_start + shape.size.width as i32 - 1;
+        #[cfg(feature = "defmt")]
+        defmt::debug_assert!(
+            x_start % 8 == 0 && x_end % 8 == 7,
+            "window's top_left.x and width must be 8-bit aligned"
+        );
+        #[cfg(not(feature = "defmt"))]
         debug_assert!(
             x_start % 8 == 0 && x_end % 8 == 7,
             "window's top_left.x and width must be 8-bit aligned"
@@ -358,7 +364,11 @@ where
     ) -> Result<(), <HW as EpdHw>::Error> {
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
+        #[cfg(feature = "defmt")]
+        defmt::debug_assert_eq!(position.x % 8, 0, "position.x must be 8-bit aligned");
+        #[cfg(not(feature = "defmt"))]
         debug_assert_eq!(position.x % 8, 0, "position.x must be 8-bit aligned");
+
         self.send(spi, Command::SetRamX, &[(position.x >> 3) as u8])
             .await?;
         let (y_low, y_high) = split_low_and_high(position.y as u16);
