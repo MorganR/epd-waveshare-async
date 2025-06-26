@@ -1,3 +1,30 @@
+//! This crate provides an `async`/`await` interface for controlling Waveshare E-Paper displays.
+//!
+//! It is built on top of `embedded-hal-async` and `embedded-graphics`, making it compatible with a
+//! wide range of embedded platforms.
+//!
+//! ## Core traits
+//!
+//! The crate is organized around two main traits:
+//!
+//! - [`Epd`]: This trait defines the core functionality for interacting with an E-Paper display,
+//!   such as initialization, refreshing, writing image data, and managing sleep states.
+//!   Implementations of this trait (e.g., [`epd2in9::Epd2In9`]) provide concrete display-specific
+//!   logic. Concrete implementations may also provide further functionality that doesn't fit in
+//!   the general `Epd` trait (e.g. modifying the border on the Epd2In9 screen).
+//!
+//! - [`EpdHw`]: This trait abstracts over the underlying hardware components required to control an
+//!   E-Paper display, including SPI communication, GPIO pins (for Data/Command, Reset, and Busy
+//!   signals), and a delay timer. You need to implement this trait for your chosen peripherals.
+//!   This trades off some set up code (implementing this trait), for simple type signatures with
+//!   only one generic parameter.
+//!
+//! Additionally, the crate provides:
+//!
+//! - `buffer` module: Contains utilities for creating and managing efficient display buffers that
+//!   implement `embedded-graphics::DrawTarget`. These are designed to be fast and compact.
+//! - `<display>` modules: each display lives in its own module, such as `epd2in9` for the 2.9"
+//!   e-paper display.
 #![no_std]
 
 use core::error::Error as CoreError;
@@ -70,8 +97,9 @@ where
         position: Point,
     ) -> Result<(), <HW as EpdHw>::Error>;
 
-    /// Writes raw image data, starting at the current cursor position and auto-incrementing x then
-    /// y within the current window.
+    /// Writes raw image data, starting at the current cursor position and auto-incrementing x and
+    /// y within the current window. By default, x should increment first, then y (data is written
+    /// in rows).
     async fn write_image(&mut self, spi: &mut HW::Spi, image: &[u8]) -> Result<(), HW::Error>;
 
     /// Updates (refreshes) the display based on what has been written to RAM. Note that this can be

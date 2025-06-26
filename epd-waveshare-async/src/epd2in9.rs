@@ -87,12 +87,12 @@ pub enum Command {
     SwReset = 0x12,
     /// Writes to the temperature register.
     TemperatureSensorControl = 0x1A,
-    /// Activates the display update sequence. This must be set beforehand using [DisplayUpdateControl2].
+    /// Activates the display update sequence. This must be set beforehand using [Command::DisplayUpdateControl2].
     /// This operation must not be interrupted.
     MasterActivation = 0x20,
     /// Used for a RAM "bypass" mode, though the precise meaning is unclear.
     DisplayUpdateControl1 = 0x21,
-    /// Configures the display update sequence for use with [MasterActivation].
+    /// Configures the display update sequence for use with [Command::MasterActivation].
     DisplayUpdateControl2 = 0x22,
     /// Writes data to RAM, auto-incrementing the address counter.
     WriteRam = 0x24,
@@ -116,7 +116,7 @@ pub enum Command {
     SetRamX = 0x4E,
     /// Sets the current y coordinate of the address counter.
     SetRamY = 0x4F,
-    /// Does nothing, but can be used to terminate other commands such as [WriteRam]
+    /// Does nothing, but can be used to terminate other commands such as [Command::WriteRam]
     Noop = 0xFF,
 }
 
@@ -316,7 +316,8 @@ where
 
     /// Sets the window to which the next image data will be written.
     ///
-    /// The x-axis only supports multiples of 8; values outside this result in an [Error::InvalidArgument] error.
+    /// The x-axis only supports multiples of 8; values outside this result in a debug-mode panic,
+    /// or potentially misaligned content when debug assertions are disabled.
     async fn set_window(
         &mut self,
         spi: &mut HW::Spi,
@@ -356,7 +357,8 @@ where
 
     /// Sets the cursor position to write the next data to.
     ///
-    /// The x-axis only supports multiples of 8; values outside this will result in [Error::InvalidArgument].
+    /// The x-axis only supports multiples of 8; values outside this will result in a panic in
+    /// debug mode, or potentially misaligned content if debug assertions are disabled.
     async fn set_cursor(
         &mut self,
         spi: &mut HW::Spi,
