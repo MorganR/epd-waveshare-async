@@ -3,18 +3,14 @@
 #![no_std]
 #![no_main]
 
-use core::convert::Infallible;
-
-use defmt::{error, expect, info};
+use defmt::{expect, info};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
-use embassy_embedded_hal::shared_bus::SpiDeviceError;
 use embassy_executor::Spawner;
-use embassy_rp::gpio::{Input, Level, Output, Pull};
-use embassy_rp::peripherals;
+use embassy_rp::gpio::{Level, Output};
 use embassy_rp::spi::{self, Spi};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Delay, Instant, Timer};
+use embassy_time::{Instant, Timer};
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::BinaryColor;
@@ -24,27 +20,10 @@ use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle};
 use epd_waveshare_async::epd2in9;
 use epd_waveshare_async::{
     epd2in9::{Epd2In9, RefreshMode},
-    Epd, EpdHw,
+    Epd,
 };
-use thiserror::Error as ThisError;
+use rp_samples::*;
 use {defmt_rtt as _, panic_probe as _};
-
-assign_resources::assign_resources! {
-    spi_hw: SpiP {
-        spi: SPI0,
-        clk: PIN_2,
-        tx: PIN_3,
-        rx: PIN_4,
-        dma_tx: DMA_CH1,
-        dma_rx: DMA_CH2,
-        cs: PIN_5,
-    },
-    epd_hw: DisplayP {
-        reset: PIN_7,
-        dc: PIN_6,
-        busy: PIN_8,
-    },
-}
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -190,79 +169,4 @@ async fn main(_spawner: Spawner) {
 
     expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     info!("Done");
-}
-
-struct DisplayHw<'a> {
-    dc: Output<'a>,
-    reset: Output<'a>,
-    busy: Input<'a>,
-    delay: Delay,
-}
-
-impl DisplayHw<'_> {
-    fn new(p: DisplayP) -> Self {
-        let dc = Output::new(p.dc, Level::High);
-        let reset = Output::new(p.reset, Level::High);
-        let busy = Input::new(p.busy, Pull::Up);
-
-        Self {
-            dc,
-            reset,
-            busy,
-            delay: Delay,
-        }
-    }
-}
-
-type RawSpiError = SpiDeviceError<spi::Error, Infallible>;
-
-type EpdSpiDevice<'a> =
-    SpiDevice<'a, NoopRawMutex, Spi<'a, peripherals::SPI0, spi::Async>, Output<'a>>;
-
-impl<'a> EpdHw for DisplayHw<'a> {
-    type Spi = EpdSpiDevice<'a>;
-
-    type Dc = Output<'a>;
-
-    type Reset = Output<'a>;
-
-    type Busy = Input<'a>;
-
-    type Delay = embassy_time::Delay;
-
-    type Error = Error;
-
-    fn dc(&mut self) -> &mut Self::Dc {
-        &mut self.dc
-    }
-
-    fn reset(&mut self) -> &mut Self::Reset {
-        &mut self.reset
-    }
-
-    fn busy(&mut self) -> &mut Self::Busy {
-        &mut self.busy
-    }
-
-    fn delay(&mut self) -> &mut Self::Delay {
-        &mut self.delay
-    }
-}
-
-#[derive(Debug, ThisError)]
-enum Error {
-    #[error("SPI error: {0:?}")]
-    SpiError(RawSpiError),
-}
-
-impl From<Infallible> for Error {
-    fn from(_: Infallible) -> Self {
-        unreachable!()
-    }
-}
-
-impl From<RawSpiError> for Error {
-    fn from(e: RawSpiError) -> Self {
-        Error::SpiError(e)
-    }
 }
