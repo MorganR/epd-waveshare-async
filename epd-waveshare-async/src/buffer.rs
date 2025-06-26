@@ -39,16 +39,27 @@ impl<const L: usize> BinaryBuffer<L> {
     /// let buffer = BinaryBuffer::<{binary_buffer_length(DIMENSIONS)}>::new(DIMENSIONS);
     /// ```
     pub fn new(dimensions: Size) -> Self {
-        debug_assert_eq!(
-            dimensions.width % 8,
-            0,
+        #[cfg(feature = "defmt")]
+        defmt::debug_assert_eq!(
+            dimensions.width % 8, 0,
             "Width must be a multiple of 8 for binary packing."
         );
+        #[cfg(not(feature="defmt"))]
         debug_assert_eq!(
-            binary_buffer_length(dimensions),
-            L,
+            dimensions.width % 8, 0,
+            "Width must be a multiple of 8 for binary packing."
+        );
+        #[cfg(feature = "defmt")]
+        defmt::debug_assert_eq!(
+            binary_buffer_length(dimensions), L,
             "Size must match given dimensions"
         );
+        #[cfg(not(feature="defmt"))]
+        debug_assert_eq!(
+            binary_buffer_length(dimensions), L,
+            "Size must match given dimensions"
+        );
+
         Self {
             bytes_per_row: dimensions.width as usize / 8,
             size: dimensions,
