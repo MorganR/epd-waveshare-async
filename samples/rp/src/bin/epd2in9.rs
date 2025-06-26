@@ -21,6 +21,7 @@ use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle};
+use epd_waveshare_async::epd2in9;
 use epd_waveshare_async::{
     epd2in9::{Epd2In9, RefreshMode},
     Epd, EpdHw,
@@ -51,10 +52,20 @@ async fn main(_spawner: Spawner) {
 
     let resources = split_resources!(p);
     let mut config = spi::Config::default();
-    // TOOD: Put these settings in the driver.
-    config.frequency = 4_000_000;
-    config.phase = spi::Phase::CaptureOnFirstTransition;
-    config.polarity = spi::Polarity::IdleLow;
+    config.frequency = epd2in9::RECOMMENDED_SPI_HZ;
+    // embassy-rp uses the synchronous phase and polarity enums, so we have to map these.
+    config.phase = match epd2in9::RECOMMENDED_SPI_PHASE {
+        embedded_hal_async::spi::Phase::CaptureOnFirstTransition => {
+            embassy_rp::spi::Phase::CaptureOnFirstTransition
+        }
+        embedded_hal_async::spi::Phase::CaptureOnSecondTransition => {
+            embassy_rp::spi::Phase::CaptureOnSecondTransition
+        }
+    };
+    config.polarity = match epd2in9::RECOMMENDED_SPI_POLARITY {
+        embedded_hal_async::spi::Polarity::IdleHigh => embassy_rp::spi::Polarity::IdleHigh,
+        embedded_hal_async::spi::Polarity::IdleLow => embassy_rp::spi::Polarity::IdleLow,
+    };
 
     let raw_spi: Mutex<NoopRawMutex, _> = Mutex::new(Spi::new(
         resources.spi_hw.spi,
