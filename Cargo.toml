@@ -10,7 +10,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Morgan Roff"]
-version = "0.1.1-alpha"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
