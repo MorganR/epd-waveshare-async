@@ -6,6 +6,7 @@ authors.workspace = true
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+readme.workspace = true
 
 [dependencies]
 defmt = { workspace = true, optional = true }
