@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "epd-waveshare-async"
-version = "0.1.2-alpha"
+version = "0.1.2"
 dependencies = [
  "defmt 1.0.1",
  "embassy-embedded-hal",
@@ -1130,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "rp-samples"
-version = "0.1.2-alpha"
+version = "0.1.2"
 dependencies = [
  "assign-resources",
  "cortex-m",
