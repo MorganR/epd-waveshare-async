@@ -30,7 +30,7 @@ opt-level = 0
 defmt = "1.0.1"
 embassy-embedded-hal = { version = "0.3.0", features = ["defmt"] }
 embassy-rp = { version = "0.4.0", features = ["chrono", "defmt", "unstable-pac", "time-driver", "critical-section-impl", "boot2-w25q080", "rp2040", "rom-v2-intrinsics"] }
-embassy-sync = "0.7.0"
+embassy-sync = "0.6.2"
 embassy-time = { version = "0.4.0", features = ["defmt", "defmt-timestamp-uptime-s"] }
 embedded-graphics = { version = "0.8.1" }
 embedded-hal = "1.0.0"
