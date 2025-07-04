@@ -22,7 +22,7 @@ defmt.workspace = true
 embedded-graphics.workspace = true
 embedded-hal-async.workspace = true
 epd-waveshare-async = { path = "../../epd-waveshare-async", features = ["defmt"] }
-embassy-time = { version = "0.4.0", features = ["defmt", "defmt-timestamp-uptime-s"] }
+embassy-time.workspace = true
 thiserror = { version = "2.0.12", default-features = false }
 assign-resources = "0.4.1"
-embassy-sync = "0.6.2"
+embassy-sync.workspace = true
