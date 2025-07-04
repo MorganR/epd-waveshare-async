@@ -41,9 +41,18 @@ pub enum RefreshMode {
     /// It's recommended to avoid full refreshes less than [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] apart,
     /// but to do a full refresh at least every [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
     Full,
-    /// Use the partial update LUT for fast refresh. A full refresh should be done occasionally to
+    /// Uses the partial update LUT for fast refresh. A full refresh should be done occasionally to
     /// avoid ghosting, see [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
+    ///
+    /// This is the standard "fast" update. It diffs the current framebuffer against the
+    /// previous framebuffer, and just updates the pixels that differ.
     Partial,
+    /// Uses the partial update LUT for a fast refresh, but only updates black (`BinaryColor::Off`)
+    /// pixels from the current framebuffer. The previous framebuffer is ignored.
+    PartialBlackBypass,
+    /// Uses the partial update LUT for a fast refresh, but only updates white (`BinaryColor::On`)
+    /// pixels from the current framebuffer. The previous framebuffer is ignored.
+    PartialWhiteBypass,
 }
 
 impl RefreshMode {
@@ -51,7 +60,7 @@ impl RefreshMode {
     pub fn lut(&self) -> &[u8; 30] {
         match self {
             RefreshMode::Full => &LUT_FULL_UPDATE,
-            RefreshMode::Partial => &LUT_PARTIAL_UPDATE,
+            _ => &LUT_PARTIAL_UPDATE,
         }
     }
 }
@@ -72,6 +81,9 @@ pub const RECOMMENDED_SPI_PHASE: Phase = Phase::CaptureOnFirstTransition;
 /// on the rising edge.
 pub const RECOMMENDED_SPI_POLARITY: Polarity = Polarity::IdleLow;
 
+/// Low-level commands for the Epd2In9. You probably want to use the other methods exposed on the
+/// [Epd2In9] for most operations, but can send commands directly with [Epd2In9::send] for low-level
+/// control or experimentation.
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -90,12 +102,25 @@ pub enum Command {
     /// Activates the display update sequence. This must be set beforehand using [Command::DisplayUpdateControl2].
     /// This operation must not be interrupted.
     MasterActivation = 0x20,
-    /// Used for a RAM "bypass" mode, though the precise meaning is unclear.
+    /// Used for a RAM "bypass" mode when using [RefreshMode::Partial]. This is poorly explained in the docs,
+    /// but essentially we have three options:
+    ///
+    /// 1. `0x00` (default): just update the pixels that have changed **between the two internal
+    ///    frame buffers**. This normally does what you expect. You can hack it a bit to do
+    ///    interesting things by writing to both the old and new frame buffers.
+    /// 2. `0x80`: just update the white (`BinaryColor::On`) pixels in the current frame buffer. It
+    ///    doesn't matter what is in the old frame buffer.
+    /// 3. `0x90`: just update the black (`BinaryColor::Off`) pixels in the current frame buffer.
+    ///    It doesn't matter what is in the old frame buffer.
+    ///
+    /// Options 2 and 3 are what the datasheet calls "bypass" mode.
     DisplayUpdateControl1 = 0x21,
     /// Configures the display update sequence for use with [Command::MasterActivation].
     DisplayUpdateControl2 = 0x22,
-    /// Writes data to RAM, auto-incrementing the address counter.
+    /// Writes data to the current frame buffer, auto-incrementing the address counter.
     WriteRam = 0x24,
+    /// Writes data to the old frame buffer, auto-incrementing the address counter.
+    WriteOldRam = 0x26,
     /// Writes to the VCOM register.
     WriteVcom = 0x2C,
     /// Writes the LUT register (30 bytes, exclude the VSH/VSL and dummy bits).
@@ -127,6 +152,10 @@ impl Command {
     }
 }
 
+/// The buffer type used by [Epd2In9].
+pub type Epd2In9Buffer =
+    BinaryBuffer<{ binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)) }>;
+
 /// This should be sent with [Command::DriverOutputControl] during initialisation.
 ///
 /// From the sample code, the bytes mean the following:
@@ -153,6 +182,7 @@ where
     HW: EpdHw,
 {
     hw: HW,
+    refresh_mode: Option<RefreshMode>,
 }
 
 impl<HW> Epd2In9<HW>
@@ -160,11 +190,17 @@ where
     HW: EpdHw,
 {
     pub fn new(hw: HW) -> Self {
-        Epd2In9 { hw }
+        Epd2In9 {
+            hw,
+            refresh_mode: None,
+        }
     }
 
     /// Sets the border to the specified colour. You need to call [Epd::update_display] using
     /// [RefreshMode::Full] afterwards to apply this change.
+    ///
+    /// Note: on my board, the white setting fades to grey fairly quickly. I have not found a way
+    /// to avoid this.
     pub async fn set_border(
         &mut self,
         spi: &mut HW::Spi,
@@ -178,8 +214,24 @@ where
             .await
     }
 
+    /// Writes buffer data into the old internal framebuffer. This can be useful either:
+    ///
+    /// * to prep the next frame before the current one has been displayed (since the old buffer
+    ///   becomes the current buffer after the next call to [Self::update_display()]).
+    /// * to modify the "diff" that is displayed if in [RefreshMode::Partial]. Also see [Command::DisplayUpdateControl1].
+    pub async fn write_old_framebuffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buffer: &Epd2In9Buffer,
+    ) -> Result<(), <HW as EpdHw>::Error> {
+        let buffer_bounds = buffer.bounding_box();
+        self.set_window(spi, buffer_bounds).await?;
+        self.set_cursor(spi, buffer_bounds.top_left).await?;
+        self.send(spi, Command::WriteOldRam, buffer.data()).await
+    }
+
     /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
-    async fn send(
+    pub async fn send(
         &mut self,
         spi: &mut HW::Spi,
         command: Command,
@@ -219,9 +271,7 @@ where
     HW: EpdHw,
 {
     type RefreshMode = RefreshMode;
-    type Buffer = BinaryBuffer<
-        { binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)) },
-    >;
+    type Buffer = Epd2In9Buffer;
 
     fn new_buffer(&self) -> Self::Buffer {
         BinaryBuffer::new(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32))
@@ -236,7 +286,7 @@ where
     }
 
     async fn init(&mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<(), HW::Error> {
-        // Ensure reset is high before toggling it low.
+        debug!("Initialising display");
         self.reset().await?;
 
         // Reset all configurations to default.
@@ -262,9 +312,7 @@ where
         // 2us per line.
         self.send(spi, Command::SetGateLineWidth, &[0x08]).await?;
 
-        self.send(spi, Command::WriteLut, mode.lut()).await?;
-
-        Ok(())
+        self.set_refresh_mode(spi, mode).await
     }
 
     async fn set_refresh_mode(
@@ -272,8 +320,37 @@ where
         spi: &mut <HW as EpdHw>::Spi,
         mode: Self::RefreshMode,
     ) -> Result<(), <HW as EpdHw>::Error> {
+        // Update the LUT only if needed.
+        match self.refresh_mode {
+            Some(old_mode) if old_mode == mode => return Ok(()),
+            Some(old_mode) if old_mode.lut() != mode.lut() => {
+                self.send(spi, Command::WriteLut, mode.lut()).await?;
+            }
+            None => {
+                self.send(spi, Command::WriteLut, mode.lut()).await?;
+            }
+            _ => {}
+        }
+
         debug!("Changing refresh mode to {:?}", mode);
-        self.send(spi, Command::WriteLut, mode.lut()).await
+        self.refresh_mode = Some(mode);
+
+        // Update bypass if needed.
+        match mode {
+            RefreshMode::Partial => {
+                self.send(spi, Command::DisplayUpdateControl1, &[0x00])
+                    .await
+            }
+            RefreshMode::PartialBlackBypass => {
+                self.send(spi, Command::DisplayUpdateControl1, &[0x90])
+                    .await
+            }
+            RefreshMode::PartialWhiteBypass => {
+                self.send(spi, Command::DisplayUpdateControl1, &[0x80])
+                    .await
+            }
+            _ => Ok(()),
+        }
     }
 
     async fn reset(&mut self) -> Result<(), HW::Error> {
@@ -303,15 +380,20 @@ where
         spi: &mut HW::Spi,
         buffer: &Self::Buffer,
     ) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Displaying buffer");
+        self.write_framebuffer(spi, buffer).await?;
+
+        self.update_display(spi).await
+    }
+
+    async fn write_framebuffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buffer: &Self::Buffer,
+    ) -> Result<(), <HW as EpdHw>::Error> {
         let buffer_bounds = buffer.bounding_box();
         self.set_window(spi, buffer_bounds).await?;
         self.set_cursor(spi, buffer_bounds.top_left).await?;
-        self.write_image(spi, buffer.data()).await?;
-
-        self.update_display(spi).await?;
-
-        Ok(())
+        self.write_image(spi, buffer.data()).await
     }
 
     /// Sets the window to which the next image data will be written.
@@ -389,6 +471,7 @@ where
         // * Sending 0xCD (INITIAL_DISPLAY + PATTERN_DISPLAY) results in seemingly broken, semi-random behaviour.
         // The INIITIAL_DISPLAY settings potentially relate to the "bypass" settings in
         // [Command::DisplayUpdateControl1], but the precise mode is unclear.
+        debug!("Updating display");
 
         self.send(spi, Command::DisplayUpdateControl2, &[0xC4])
             .await?;

@@ -86,6 +86,13 @@ where
         buffer: &Self::Buffer,
     ) -> Result<(), HW::Error>;
 
+    /// Writes the buffer's data to the display's internal framebuffer, but does not display it.
+    async fn write_framebuffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buffer: &Self::Buffer,
+    ) -> Result<(), HW::Error>;
+
     /// Sets the window to write to during a call to [Epd::write_image]. This can enable partial
     /// writes to a subsection of the display.
     async fn set_window(&mut self, spi: &mut HW::Spi, shape: Rectangle) -> Result<(), HW::Error>;

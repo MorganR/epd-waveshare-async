@@ -41,22 +41,26 @@ impl<const L: usize> BinaryBuffer<L> {
     pub fn new(dimensions: Size) -> Self {
         #[cfg(feature = "defmt")]
         defmt::debug_assert_eq!(
-            dimensions.width % 8, 0,
+            dimensions.width % 8,
+            0,
             "Width must be a multiple of 8 for binary packing."
         );
-        #[cfg(not(feature="defmt"))]
+        #[cfg(not(feature = "defmt"))]
         debug_assert_eq!(
-            dimensions.width % 8, 0,
+            dimensions.width % 8,
+            0,
             "Width must be a multiple of 8 for binary packing."
         );
         #[cfg(feature = "defmt")]
         defmt::debug_assert_eq!(
-            binary_buffer_length(dimensions), L,
+            binary_buffer_length(dimensions),
+            L,
             "Size must match given dimensions"
         );
-        #[cfg(not(feature="defmt"))]
+        #[cfg(not(feature = "defmt"))]
         debug_assert_eq!(
-            binary_buffer_length(dimensions), L,
+            binary_buffer_length(dimensions),
+            L,
             "Size must match given dimensions"
         );
 
