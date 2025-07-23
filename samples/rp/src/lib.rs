@@ -7,6 +7,7 @@ use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_embedded_hal::shared_bus::SpiDeviceError;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals;
+use embassy_rp::Peri;
 use embassy_rp::spi::{self, Spi};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Delay;
