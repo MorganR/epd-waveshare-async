@@ -43,6 +43,7 @@ use embedded_hal_async::{
 pub mod buffer;
 pub mod epd2in9;
 
+mod comms;
 mod log;
 
 #[allow(async_fn_in_trait)]

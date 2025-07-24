@@ -5,14 +5,15 @@ use embedded_graphics::{
     primitives::Rectangle,
 };
 use embedded_hal::{
-    digital::{InputPin, OutputPin},
+    digital::OutputPin,
     spi::{Phase, Polarity},
 };
-use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
+use embedded_hal_async::delay::DelayNs;
 
 use crate::{
     buffer::{binary_buffer_length, BinaryBuffer},
-    log::{debug, trace},
+    comms::{CommandDataSend as _},
+    log::debug,
     Epd, EpdHw,
 };
 
@@ -237,32 +238,7 @@ where
         command: Command,
         data: &[u8],
     ) -> Result<(), HW::Error> {
-        trace!("Sending EPD command: {:?}", command);
-        self.wait_if_busy().await?;
-
-        self.hw.dc().set_low()?;
-        spi.write(&[command.register()]).await?;
-
-        if !data.is_empty() {
-            self.hw.dc().set_high()?;
-            spi.write(data).await?;
-        }
-
-        Ok(())
-    }
-
-    /// Waits for the current operation to complete if the display is busy.
-    ///
-    /// Note that this will wait forever if the display is asleep.
-    async fn wait_if_busy(&mut self) -> Result<(), HW::Error> {
-        let busy = self.hw.busy();
-        // Note: the datasheet states that busy pin is active low, i.e. we should wait for it when
-        // it's low, but this is incorrect. The sample code treats it as active high, which works.
-        if busy.is_high().unwrap() {
-            trace!("Waiting for busy EPD");
-            busy.wait_for_low().await?;
-        }
-        Ok(())
+        self.hw.send(spi, command.register(), data).await
     }
 }
 
