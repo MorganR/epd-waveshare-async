@@ -18,4 +18,19 @@ macro_rules! trace {
     };
 }
 
-pub(crate) use {debug, trace};
+macro_rules! debug_assert {
+    ($assertion:expr, $message:expr) => {
+        #[cfg(feature = "defmt")]
+        defmt::debug_assert!(
+            $assertion,
+            $message,
+        );
+        #[cfg(not(feature = "defmt"))]
+        debug_assert!(
+            $assertion,
+            $message,
+        );  
+    };
+}
+
+pub(crate) use {debug, debug_assert, trace};
