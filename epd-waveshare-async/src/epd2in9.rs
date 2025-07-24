@@ -133,9 +133,16 @@ pub enum Command {
     /// Register to configure the behaviour of the border.
     BorderWaveformControl = 0x3C,
     /// Sets the start and end positions of the X axis for the auto-incrementing address counter.
-    /// Note that the x position can only be configured as a multiple of 8.
+    /// Start and end are inclusive.
+    /// 
+    /// Note that the x position can only be written on a whole byte basis (8 bits at once). The
+    /// start and end positions are therefore sent right shifted 3 bits to indicate the byte number
+    /// being written. For example, to write the first 32 x positions, you would send 0 (0 >> 3 =
+    /// 0), and 3 (31 >> 3 = 3). If you tried to write just the first 25 x positions, you would end
+    /// up sending the same values and actually writing all 32.
     SetRamXStartEnd = 0x44,
     /// Sets the start and end positions of the Y axis for the auto-incrementing address counter.
+    /// Start and end are inclusive.
     SetRamYStartEnd = 0x45,
     /// Sets the current x coordinate of the address counter.
     /// Note that the x position can only be configured as a multiple of 8.
