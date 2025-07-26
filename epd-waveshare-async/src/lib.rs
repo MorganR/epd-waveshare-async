@@ -42,6 +42,7 @@ use embedded_hal_async::{
 
 pub mod buffer;
 pub mod epd2in9;
+pub mod epd2in9_v2;
 
 mod comms;
 mod log;

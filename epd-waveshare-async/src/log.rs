@@ -18,6 +18,16 @@ macro_rules! trace {
     };
 }
 
+macro_rules! warn_log {
+    ($($arg:tt)*) => {
+        #[cfg(feature = "defmt")]
+        defmt::warn!($($arg)*);
+
+        #[cfg(feature = "log")]
+        log::warn!($($arg)*);
+    };
+}
+
 macro_rules! debug_assert {
     ($assertion:expr, $message:expr) => {
         #[cfg(feature = "defmt")]
@@ -33,4 +43,4 @@ macro_rules! debug_assert {
     };
 }
 
-pub(crate) use {debug, debug_assert, trace};
+pub(crate) use {debug, debug_assert, trace, warn_log};
