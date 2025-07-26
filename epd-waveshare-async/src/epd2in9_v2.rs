@@ -87,6 +87,8 @@ pub enum RefreshMode {
     ///
     /// This is the standard "fast" update. It diffs the current framebuffer against the
     /// previous framebuffer, and just updates the pixels that differ.
+    /// 
+    /// TODO: This doesn't work yet.
     Partial,
 }
 
@@ -399,7 +401,7 @@ where
         debug!("Waking EPD");
         self.reset().await
 
-        // Confirmed with a physical screen that init is not required after waking.
+        // self.init(spi, self.refresh_mode.unwrap_or(RefreshMode::Full)).await
     }
 
     async fn display_buffer(

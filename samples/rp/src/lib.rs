@@ -18,18 +18,16 @@ use {defmt_rtt as _, panic_probe as _};
 // Define the resources needed to communicate with the display.
 assign_resources::assign_resources! {
     spi_hw: SpiP {
-        spi: SPI0,
-        clk: PIN_2,
-        tx: PIN_3,
-        rx: PIN_4,
+        spi: SPI1,
+        clk: PIN_10,
+        tx: PIN_11,
         dma_tx: DMA_CH1,
-        dma_rx: DMA_CH2,
-        cs: PIN_5,
+        cs: PIN_9,
     },
     epd_hw: DisplayP {
-        reset: PIN_7,
-        dc: PIN_6,
-        busy: PIN_8,
+        reset: PIN_12,
+        dc: PIN_8,
+        busy: PIN_13,
     },
 }
 
@@ -59,7 +57,7 @@ impl DisplayHw<'_> {
 pub type RawSpiError = SpiDeviceError<spi::Error, Infallible>;
 
 type EpdSpiDevice<'a> =
-    SpiDevice<'a, NoopRawMutex, Spi<'a, peripherals::SPI0, spi::Async>, Output<'a>>;
+    SpiDevice<'a, NoopRawMutex, Spi<'a, peripherals::SPI1, spi::Async>, Output<'a>>;
 
 impl<'a> EpdHw for DisplayHw<'a> {
     type Spi = EpdSpiDevice<'a>;
