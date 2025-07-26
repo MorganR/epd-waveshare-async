@@ -403,6 +403,14 @@ impl<B: DrawTarget, R: Rotation> DrawTarget for RotatedBuffer<B, R> {
     }
 }
 
+#[inline(always)]
+/// Splits a 16-bit value into the two 8-bit values representing the low and high bytes.
+pub(crate) fn split_low_and_high(value: u16) -> (u8, u8) {
+    let low = (value & 0xFF) as u8;
+    let high = ((value >> 8) & 0xFF) as u8;
+    (low, high)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

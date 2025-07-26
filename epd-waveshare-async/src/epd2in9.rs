@@ -11,7 +11,7 @@ use embedded_hal::{
 use embedded_hal_async::delay::DelayNs;
 
 use crate::{
-    buffer::{binary_buffer_length, BinaryBuffer},
+    buffer::{binary_buffer_length, BinaryBuffer, split_low_and_high},
     comms::{CommandDataSend as _},
     log::{debug, debug_assert},
     Epd, EpdHw,
@@ -461,12 +461,4 @@ where
     ) -> Result<(), <HW as EpdHw>::Error> {
         self.send(spi, Command::WriteRam, image).await
     }
-}
-
-#[inline(always)]
-/// Splits a 16-bit value into the two 8-bit values representing the low and high bytes.
-pub fn split_low_and_high(value: u16) -> (u8, u8) {
-    let low = (value & 0xFF) as u8;
-    let high = ((value >> 8) & 0xFF) as u8;
-    (low, high)
 }
