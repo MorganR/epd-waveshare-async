@@ -11,7 +11,7 @@ use embedded_hal_async::delay::DelayNs;
 
 use crate::{
     buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer},
-    comms::CommandDataSend as _,
+    hw::CommandDataSend as _,
     log::{debug, debug_assert, warn_log},
     Epd, EpdHw,
 };
