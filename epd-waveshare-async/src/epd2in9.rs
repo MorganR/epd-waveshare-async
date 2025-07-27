@@ -11,8 +11,8 @@ use embedded_hal::{
 use embedded_hal_async::delay::DelayNs;
 
 use crate::{
-    buffer::{binary_buffer_length, BinaryBuffer, split_low_and_high},
-    comms::{CommandDataSend as _},
+    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer},
+    comms::CommandDataSend as _,
     log::{debug, debug_assert},
     Epd, EpdHw,
 };
@@ -134,7 +134,7 @@ pub enum Command {
     BorderWaveformControl = 0x3C,
     /// Sets the start and end positions of the X axis for the auto-incrementing address counter.
     /// Start and end are inclusive.
-    /// 
+    ///
     /// Note that the x position can only be written on a whole byte basis (8 bits at once). The
     /// start and end positions are therefore sent right shifted 3 bits to indicate the byte number
     /// being written. For example, to write the first 32 x positions, you would send 0 (0 >> 3 =

@@ -18,6 +18,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle};
 use epd_waveshare_async::epd2in9::{self};
+use epd_waveshare_async::epd2in9_v2::Command;
 use epd_waveshare_async::{
     epd2in9_v2::{Epd2In9V2, RefreshMode},
     Epd,
@@ -69,18 +70,19 @@ async fn main(_spawner: Spawner) {
         .fill_solid(&buffer.bounding_box(), BinaryColor::On)
         .unwrap();
     info!("Displaying white buffer");
+    // TODO: try properly setting this after low ram, but before turning on the display
+    // epd.send(&mut spi, Command::WriteHighRam, buffer.data()).await.unwrap();
+    // I suspect I need to set both "low" and "high" buffers before doing a partial update.
     expect!(
         epd.display_buffer(&mut spi, &buffer).await,
         "Failed to display buffer"
     );
     Timer::after_secs(4).await;
 
-    // info!("Changing to partial refresh mode");
-    // expect!(
-    //     epd.set_refresh_mode(&mut spi, RefreshMode::Partial).await,
-    //     "Failed to set refresh mode"
-    // );
-
+    // Set the base image for partial refresh.
+    epd.send(&mut spi, Command::WriteHighRam, buffer.data())
+        .await
+        .unwrap();
     info!("Displaying text");
     let mut style = TextStyle::default();
     style.alignment = Alignment::Left;
@@ -93,6 +95,12 @@ async fn main(_spawner: Spawner) {
         "Failed to display text buffer"
     );
     Timer::after_secs(4).await;
+
+    info!("Changing to partial refresh mode");
+    expect!(
+        epd.set_refresh_mode(&mut spi, RefreshMode::Partial).await,
+        "Failed to set refresh mode"
+    );
 
     info!("Displaying check buffer");
     let before_buffer_draw = Instant::now();
@@ -131,6 +139,17 @@ async fn main(_spawner: Spawner) {
     );
     Timer::after_secs(4).await;
 
+    // This works differently from V1: it displays the same image in RefreshMode::Full,
+    // or toggles back to the "base" image in RefreshMode::Partial.
+    info!("Re-displaying as a test");
+    expect!(epd.update_display(&mut spi).await, "Failed to re-display");
+    Timer::after_secs(2).await;
+
+    // In partial, this toggles back to the check buffer.
+    info!("Re-displaying as a test");
+    expect!(epd.update_display(&mut spi).await, "Failed to re-display");
+    Timer::after_secs(2).await;
+
     info!("Sleeping EPD");
     expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     Timer::after_secs(2).await;
@@ -152,6 +171,15 @@ async fn main(_spawner: Spawner) {
         "Failed to display text buffer"
     );
     Timer::after_secs(4).await;
+
+    epd.set_refresh_mode(&mut spi, RefreshMode::Full)
+        .await
+        .unwrap();
+    buffer.clear(BinaryColor::On).unwrap();
+    expect!(
+        epd.display_buffer(&mut spi, &buffer).await,
+        "Failed to clear display"
+    );
 
     expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     info!("Done");

@@ -31,15 +31,9 @@ macro_rules! warn_log {
 macro_rules! debug_assert {
     ($assertion:expr, $message:expr) => {
         #[cfg(feature = "defmt")]
-        defmt::debug_assert!(
-            $assertion,
-            $message,
-        );
+        defmt::debug_assert!($assertion, $message,);
         #[cfg(not(feature = "defmt"))]
-        debug_assert!(
-            $assertion,
-            $message,
-        );  
+        debug_assert!($assertion, $message,);
     };
 }
 
