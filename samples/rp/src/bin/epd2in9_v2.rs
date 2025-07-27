@@ -21,7 +21,7 @@ use epd_waveshare_async::epd2in9::{self};
 use epd_waveshare_async::epd2in9_v2::Command;
 use epd_waveshare_async::{
     epd2in9_v2::{Epd2In9V2, RefreshMode},
-    Epd,
+    *,
 };
 use rp_samples::*;
 use {defmt_rtt as _, panic_probe as _};
@@ -65,7 +65,7 @@ async fn main(_spawner: Spawner) {
         "Failed to initialize EPD"
     );
 
-    let mut buffer = epd.new_buffer();
+    let mut buffer = epd2in9_v2::new_binary_buffer();
     buffer
         .fill_solid(&buffer.bounding_box(), BinaryColor::On)
         .unwrap();
@@ -74,15 +74,14 @@ async fn main(_spawner: Spawner) {
     // epd.send(&mut spi, Command::WriteHighRam, buffer.data()).await.unwrap();
     // I suspect I need to set both "low" and "high" buffers before doing a partial update.
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display buffer"
     );
     Timer::after_secs(4).await;
 
-    // Set the base image for partial refresh.
-    epd.send(&mut spi, Command::WriteHighRam, buffer.data())
-        .await
-        .unwrap();
+    // Clear the base image for later partial refresh.
+    epd.write_base_framebuffer(&mut spi, &buffer).await.unwrap();
+
     info!("Displaying text");
     let mut style = TextStyle::default();
     style.alignment = Alignment::Left;
@@ -91,7 +90,7 @@ async fn main(_spawner: Spawner) {
     let text = Text::with_text_style("Hello, EPD!", Point::new(10, 10), character_style, style);
     text.draw(&mut buffer).unwrap();
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display text buffer"
     );
     Timer::after_secs(4).await;
@@ -134,7 +133,7 @@ async fn main(_spawner: Spawner) {
         (after_buffer_draw - before_buffer_draw).as_millis()
     );
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display check buffer"
     );
     Timer::after_secs(4).await;
@@ -167,7 +166,7 @@ async fn main(_spawner: Spawner) {
     let text = Text::with_text_style("I'm awake!", Point::new(10, 30), character_style, style);
     text.draw(&mut buffer).unwrap();
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display text buffer"
     );
     Timer::after_secs(4).await;
@@ -177,7 +176,7 @@ async fn main(_spawner: Spawner) {
         .unwrap();
     buffer.clear(BinaryColor::On).unwrap();
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to clear display"
     );
 

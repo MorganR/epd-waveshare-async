@@ -28,9 +28,9 @@
 #![no_std]
 
 use embedded_graphics::{
-    prelude::{DrawTarget, Point},
-    primitives::Rectangle,
+    prelude::DrawTarget,
 };
+use embedded_hal_async::spi::SpiDevice;
 
 pub mod buffer;
 pub mod epd2in9;
@@ -39,80 +39,53 @@ pub mod epd2in9_v2;
 mod hw;
 mod log;
 
+use crate::buffer::BufferView;
 pub use crate::hw::EpdHw;
 
-#[allow(async_fn_in_trait)]
-pub trait Epd<HW>
-where
-    HW: EpdHw,
-{
-    type RefreshMode;
-    type Buffer: DrawTarget;
+pub trait Reset<ERROR> {
+    /// Hardware resets the display.
+    async fn reset(&mut self) -> Result<(), ERROR>;
+}
 
-    /// Creates a buffer for use with this display.
-    fn new_buffer(&self) -> Self::Buffer;
-
-    fn width(&self) -> u32;
-
-    fn height(&self) -> u32;
-
-    /// Initialise the display. This must be called before any other operations.
-    async fn init(&mut self, spi: &mut HW::Spi, mode: Self::RefreshMode) -> Result<(), HW::Error>;
-
-    /// Sets the refresh mode for the display.
-    async fn set_refresh_mode(
-        &mut self,
-        spi: &mut HW::Spi,
-        mode: Self::RefreshMode,
-    ) -> Result<(), HW::Error>;
-
-    /// Hardware reset the display.
-    async fn reset(&mut self) -> Result<(), HW::Error>;
-
+/// Displays that can sleep to save power.
+pub trait Sleep<SPI: SpiDevice, ERROR> {
     /// Puts the display to sleep.
-    async fn sleep(&mut self, spi: &mut HW::Spi) -> Result<(), HW::Error>;
+    async fn sleep(&mut self, spi: &mut SPI) -> Result<(), ERROR>;
 
     /// Wakes and re-initialises the display (if necessary) if it's asleep.
-    async fn wake(&mut self, spi: &mut HW::Spi) -> Result<(), HW::Error>;
+    async fn wake(&mut self, spi: &mut SPI) -> Result<(), ERROR>;
+}
 
-    /// Writes the buffer's data to the display and displays it.
-    async fn display_buffer(
-        &mut self,
-        spi: &mut HW::Spi,
-        buffer: &Self::Buffer,
-    ) -> Result<(), HW::Error>;
-
-    /// Writes the buffer's data to the display's internal framebuffer, but does not display it.
-    async fn write_framebuffer(
-        &mut self,
-        spi: &mut HW::Spi,
-        buffer: &Self::Buffer,
-    ) -> Result<(), HW::Error>;
-
-    /// Sets the window to write to during a call to [Epd::write_image]. This can enable partial
-    /// writes to a subsection of the display.
-    async fn set_window(&mut self, spi: &mut HW::Spi, shape: Rectangle) -> Result<(), HW::Error>;
-
-    /// Sets the cursor position for where the next byte of image data will be written.
-    async fn set_cursor(
-        &mut self,
-        spi: &mut HW::Spi,
-        position: Point,
-    ) -> Result<(), <HW as EpdHw>::Error>;
-
-    /// Writes raw image data, starting at the current cursor position and auto-incrementing x and
-    /// y within the current window. By default, x should increment first, then y (data is written
-    /// in rows).
-    async fn write_image(&mut self, spi: &mut HW::Spi, image: &[u8]) -> Result<(), HW::Error>;
-
+pub trait Displayable<SPI: SpiDevice, ERROR> {
     /// Updates (refreshes) the display based on what has been written to RAM. Note that this can be
-    /// stateful. For example, on the Epd2in9 display, there are two RAM buffers. Calling this
-    /// function swaps the active buffer. Consider this scenario:
+    /// stateful, for example displays in [DisplayPartial] mode often swap two underlying
+    /// framebuffers on calls to this method, resulting in the following behaviour:
     ///
-    /// 1. [Epd::write_image] is used to turn the RAM all white.
-    /// 2. [Epd::update_display] is called, which refreshes the display to be all white.
-    /// 3. [Epd::write_image] is used to turn the RAM all black.
-    /// 4. [Epd::update_display] is called, which refreshes the display to be all black.
-    /// 5. [Epd::update_display] is called again, which refreshes the display to be all white again.
-    async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), HW::Error>;
+    /// 1. [DisplayPartial::write_diff_framebuffer] is used to turn the RAM all white.
+    /// 2. [Displayable::update_display] is called, which refreshes the display to be all white.
+    /// 3. [DisplayPartial::write_diff_framebuffer] is used to turn the RAM all black.
+    /// 4. [Displayable::update_display] is called, which refreshes the display to be all black.
+    /// 5. [Displayable::update_display] is called again, which refreshes the display to be all white again.
+    async fn update_display(&mut self, spi: &mut SPI) -> Result<(), ERROR>;
+}
+
+pub trait DisplaySimple<const BITS: usize, const FRAMES: usize, SPI: SpiDevice, ERROR>: Displayable<SPI, ERROR> {
+    async fn write_framebuffer(&mut self, spi: &mut SPI, buf: &dyn BufferView<BITS, FRAMES>) -> Result<(), ERROR>;
+
+    async fn display_framebuffer(&mut self, spi: &mut SPI, buf: &dyn BufferView<BITS, FRAMES>) -> Result<(), ERROR>;
+}
+
+pub trait DisplayPartial<const BITS: usize, const FRAMES: usize, SPI: SpiDevice, ERROR>: Displayable<SPI, ERROR> {
+    /// Writes the buffer to the base framebuffer that the "diff" layer will be diffed against.
+    /// Only pixels that differ will be updated.
+    /// 
+    /// For standard use, you probably only need to call this once before the first partial display.
+    async fn write_base_framebuffer(&mut self, spi: &mut SPI, buf: &dyn BufferView<BITS, FRAMES>) -> Result<(), ERROR>;
+    /// Writes the buffer to the diff layer, which will be diffed against the base. Only pixels that
+    /// differ will be updated.
+    /// 
+    /// On calls to [Displayable::update_display], the diff and base framebuffers should
+    /// automatically be swapped. In most cases, this means that [DisplayPartial::write_base_framebuffer]
+    /// only needs to be called once to support repeated partial refreshes.
+    async fn write_diff_framebuffer(&mut self, spi: &mut SPI, buf: &dyn BufferView<BITS, FRAMES>) -> Result<(), ERROR>;
 }

@@ -11,10 +11,7 @@ use embedded_hal::{
 use embedded_hal_async::delay::DelayNs;
 
 use crate::{
-    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer},
-    hw::CommandDataSend as _,
-    log::{debug, debug_assert},
-    Epd, EpdHw,
+    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView}, hw::CommandDataSend as _, log::{debug, debug_assert}, DisplayPartial, DisplaySimple, Displayable, EpdHw, Reset, Sleep
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -160,9 +157,15 @@ impl Command {
     }
 }
 
+/// The length of the underlying buffer used by [Epd2In9].
+pub const BINARY_BUFFER_LENGTH: usize = binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32));
 /// The buffer type used by [Epd2In9].
 pub type Epd2In9Buffer =
     BinaryBuffer<{ binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)) }>;
+/// Constructs a new buffer for use with the [Epd2In9] display.
+pub fn new_buffer() -> Epd2In9Buffer {
+    Epd2In9Buffer::new(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32))
+}
 
 /// This should be sent with [Command::DriverOutputControl] during initialisation.
 ///
@@ -204,71 +207,8 @@ where
         }
     }
 
-    /// Sets the border to the specified colour. You need to call [Epd::update_display] using
-    /// [RefreshMode::Full] afterwards to apply this change.
-    ///
-    /// Note: on my board, the white setting fades to grey fairly quickly. I have not found a way
-    /// to avoid this.
-    pub async fn set_border(
-        &mut self,
-        spi: &mut HW::Spi,
-        color: BinaryColor,
-    ) -> Result<(), HW::Error> {
-        let border_setting: u8 = match color {
-            BinaryColor::Off => 0x00,
-            BinaryColor::On => 0x01,
-        };
-        self.send(spi, Command::BorderWaveformControl, &[border_setting])
-            .await
-    }
-
-    /// Writes buffer data into the old internal framebuffer. This can be useful either:
-    ///
-    /// * to prep the next frame before the current one has been displayed (since the old buffer
-    ///   becomes the current buffer after the next call to [Self::update_display()]).
-    /// * to modify the "diff" that is displayed if in [RefreshMode::Partial]. Also see [Command::DisplayUpdateControl1].
-    pub async fn write_old_framebuffer(
-        &mut self,
-        spi: &mut HW::Spi,
-        buffer: &Epd2In9Buffer,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        let buffer_bounds = buffer.bounding_box();
-        self.set_window(spi, buffer_bounds).await?;
-        self.set_cursor(spi, buffer_bounds.top_left).await?;
-        self.send(spi, Command::WriteOldRam, buffer.data()).await
-    }
-
-    /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
-    pub async fn send(
-        &mut self,
-        spi: &mut HW::Spi,
-        command: Command,
-        data: &[u8],
-    ) -> Result<(), HW::Error> {
-        self.hw.send(spi, command.register(), data).await
-    }
-}
-
-impl<HW> Epd<HW> for Epd2In9<HW>
-where
-    HW: EpdHw,
-{
-    type RefreshMode = RefreshMode;
-    type Buffer = Epd2In9Buffer;
-
-    fn new_buffer(&self) -> Self::Buffer {
-        BinaryBuffer::new(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32))
-    }
-
-    fn width(&self) -> u32 {
-        DISPLAY_WIDTH as u32
-    }
-
-    fn height(&self) -> u32 {
-        DISPLAY_HEIGHT as u32
-    }
-
-    async fn init(&mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<(), HW::Error> {
+    /// Initialise the display. This must be called before any other operations.
+    pub async fn init(&mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<(), HW::Error> {
         debug!("Initialising display");
         self.reset().await?;
 
@@ -298,10 +238,28 @@ where
         self.set_refresh_mode(spi, mode).await
     }
 
-    async fn set_refresh_mode(
+    /// Sets the border to the specified colour. You need to call [Epd::update_display] using
+    /// [RefreshMode::Full] afterwards to apply this change.
+    ///
+    /// Note: on my board, the white setting fades to grey fairly quickly. I have not found a way
+    /// to avoid this.
+    pub async fn set_border(
+        &mut self,
+        spi: &mut HW::Spi,
+        color: BinaryColor,
+    ) -> Result<(), HW::Error> {
+        let border_setting: u8 = match color {
+            BinaryColor::Off => 0x00,
+            BinaryColor::On => 0x01,
+        };
+        self.send(spi, Command::BorderWaveformControl, &[border_setting])
+            .await
+    }
+
+    pub async fn set_refresh_mode(
         &mut self,
         spi: &mut <HW as EpdHw>::Spi,
-        mode: Self::RefreshMode,
+        mode: RefreshMode,
     ) -> Result<(), <HW as EpdHw>::Error> {
         // Update the LUT only if needed.
         match self.refresh_mode {
@@ -336,54 +294,27 @@ where
         }
     }
 
-    async fn reset(&mut self) -> Result<(), HW::Error> {
-        debug!("Resetting EPD");
-        // Assume reset is already high.
-        self.hw.reset().set_low()?;
-        self.hw.delay().delay_ms(10).await;
-        self.hw.reset().set_high()?;
-        self.hw.delay().delay_ms(10).await;
-        Ok(())
-    }
-
-    async fn sleep(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Sleeping EPD");
-        self.send(spi, Command::DeepSleepMode, &[0x01]).await
-    }
-
-    async fn wake(&mut self, _spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Waking EPD");
-        self.reset().await
-
-        // Confirmed with a physical screen that init is not required after waking.
-    }
-
-    async fn display_buffer(
+    /// Writes buffer data into the old internal framebuffer. This can be useful either:
+    ///
+    /// * to prep the next frame before the current one has been displayed (since the old buffer
+    ///   becomes the current buffer after the next call to [Self::update_display()]).
+    /// * to modify the "diff" that is displayed if in [RefreshMode::Partial]. Also see [Command::DisplayUpdateControl1].
+    pub async fn write_old_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
-        buffer: &Self::Buffer,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        self.write_framebuffer(spi, buffer).await?;
-
-        self.update_display(spi).await
-    }
-
-    async fn write_framebuffer(
-        &mut self,
-        spi: &mut HW::Spi,
-        buffer: &Self::Buffer,
+        buffer: &Epd2In9Buffer,
     ) -> Result<(), <HW as EpdHw>::Error> {
         let buffer_bounds = buffer.bounding_box();
         self.set_window(spi, buffer_bounds).await?;
         self.set_cursor(spi, buffer_bounds.top_left).await?;
-        self.write_image(spi, buffer.data()).await
+        self.send(spi, Command::WriteOldRam, buffer.data()).await
     }
 
     /// Sets the window to which the next image data will be written.
     ///
     /// The x-axis only supports multiples of 8; values outside this result in a debug-mode panic,
     /// or potentially misaligned content when debug assertions are disabled.
-    async fn set_window(
+    pub async fn set_window(
         &mut self,
         spi: &mut HW::Spi,
         shape: Rectangle,
@@ -418,7 +349,7 @@ where
     ///
     /// The x-axis only supports multiples of 8; values outside this will result in a panic in
     /// debug mode, or potentially misaligned content if debug assertions are disabled.
-    async fn set_cursor(
+    pub async fn set_cursor(
         &mut self,
         spi: &mut HW::Spi,
         position: Point,
@@ -434,6 +365,18 @@ where
         Ok(())
     }
 
+    /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
+    pub async fn send(
+        &mut self,
+        spi: &mut HW::Spi,
+        command: Command,
+        data: &[u8],
+    ) -> Result<(), HW::Error> {
+        self.hw.send(spi, command.register(), data).await
+    }
+}
+
+impl <HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9<HW> {
     async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
         // Enable the clock and CP (?), and then display the data from the RAM. Note that there are
         // two RAM buffers, so this will swap the active buffer. Calling this function twice in a row
@@ -453,12 +396,70 @@ where
         self.send(spi, Command::Noop, &[]).await?;
         Ok(())
     }
+}
 
-    async fn write_image(
+impl <HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9<HW> {
+    async fn display_framebuffer(&mut self, spi: &mut HW::Spi, buf: &dyn BufferView<1, 1>) -> Result<(), HW::Error> {
+        self.write_framebuffer(spi, buf).await?;
+
+        self.update_display(spi).await
+    }
+
+    /// Writes raw image data, starting at the current cursor position and auto-incrementing x and
+    /// y within the current window. By default, x should increment first, then y (data is written
+    /// in rows).
+    async fn write_framebuffer(&mut self, spi: &mut HW::Spi, buf: &dyn BufferView<1, 1>) -> Result<(), HW::Error> {
+        let buffer_bounds = buf.window();
+        self.set_window(spi, buffer_bounds).await?;
+        self.set_cursor(spi, buffer_bounds.top_left).await?;
+        self.send(spi, Command::WriteRam, buf.data()[0]).await
+    }
+}
+
+impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9<HW> {
+    /// Writes buffer data into the old internal framebuffer. This can be useful either:
+    ///
+    /// * to prep the next frame before the current one has been displayed (since the old buffer
+    ///   becomes the current buffer after the next call to [Self::update_display()]).
+    /// * to modify the "diff" that is displayed if in [RefreshMode::Partial]. Also see [Command::DisplayUpdateControl1].
+    async fn write_base_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
-        image: &[u8],
+        buf: &dyn BufferView<1, 1>,
     ) -> Result<(), <HW as EpdHw>::Error> {
-        self.send(spi, Command::WriteRam, image).await
+        let buffer_bounds = buf.window();
+        self.set_window(spi, buffer_bounds).await?;
+        self.set_cursor(spi, buffer_bounds.top_left).await?;
+        self.send(spi, Command::WriteOldRam, buf.data()[0]).await
+    }
+
+    async fn write_diff_framebuffer(&mut self, spi: &mut HW::Spi, buf: &dyn BufferView<1, 1>) -> Result<(), HW::Error> {
+        self.write_framebuffer(spi, buf).await
+    }
+}
+
+impl <HW: EpdHw> Reset<HW::Error> for Epd2In9<HW> {
+    async fn reset(&mut self) -> Result<(), HW::Error> {
+        debug!("Resetting EPD");
+        // Assume reset is already high.
+        self.hw.reset().set_low()?;
+        self.hw.delay().delay_ms(10).await;
+        self.hw.reset().set_high()?;
+        self.hw.delay().delay_ms(10).await;
+        Ok(())
+    }
+}
+
+impl <HW: EpdHw> Sleep<HW::Spi, HW::Error> for Epd2In9<HW> {
+    async fn sleep(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+        debug!("Sleeping EPD");
+        self.send(spi, Command::DeepSleepMode, &[0x01]).await
+    }
+
+    async fn wake(&mut self, _spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+        debug!("Waking EPD");
+        self.reset().await
+
+        // Confirmed with a physical screen that init is not required after waking.
     }
 }

@@ -10,6 +10,15 @@ use embedded_graphics::{
     Pixel,
 };
 
+/// Provides a view into a display buffer's data. This buffer is encoded into a set number of frames and bits per pixel.
+pub trait BufferView<const BITS: usize, const FRAMES: usize> {
+    /// Returns the display window covered by this buffer.
+    fn window(&self) -> Rectangle;
+
+    /// Returns the data to be written to this window.
+    fn data(&self) -> [&[u8]; FRAMES];
+}
+
 /// A compact buffer for storing binary coloured display data.
 ///
 /// This buffer packs the data such that each byte represents 8 pixels.
@@ -74,6 +83,16 @@ impl<const L: usize> BinaryBuffer<L> {
     /// Access the packed buffer data.
     pub fn data(&self) -> &[u8] {
         &self.data
+    }
+}
+
+impl <const L: usize> BufferView<1, 1> for BinaryBuffer<L> {
+    fn window(&self) -> Rectangle {
+        Rectangle::new(Point::zero(), self.size)
+    }
+
+    fn data(&self) -> [&[u8]; 1] {
+        [self.data()]
     }
 }
 
