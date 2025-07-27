@@ -17,10 +17,8 @@ use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle};
-use epd_waveshare_async::epd2in9::{self};
-use epd_waveshare_async::epd2in9_v2::Command;
+use epd_waveshare_async::epd2in9_v2::{Epd2In9V2, RefreshModeFull, RefreshModePartial};
 use epd_waveshare_async::{
-    epd2in9_v2::{Epd2In9V2, RefreshMode},
     *,
 };
 use rp_samples::*;
@@ -57,11 +55,11 @@ async fn main(_spawner: Spawner) {
     // CS is active low.
     let cs_pin = Output::new(resources.spi_hw.cs, Level::High);
     let mut spi = SpiDevice::new(&raw_spi, cs_pin);
-    let mut epd = Epd2In9V2::new(DisplayHw::new(resources.epd_hw));
+    let epd = Epd2In9V2::new(DisplayHw::new(resources.epd_hw));
 
     info!("Initializing EPD");
-    expect!(
-        epd.init(&mut spi, RefreshMode::Full).await,
+    let mut epd = expect!(
+        epd.init(&mut spi, RefreshModeFull).await,
         "Failed to initialize EPD"
     );
 
@@ -79,9 +77,6 @@ async fn main(_spawner: Spawner) {
     );
     Timer::after_secs(4).await;
 
-    // Clear the base image for later partial refresh.
-    epd.write_base_framebuffer(&mut spi, &buffer).await.unwrap();
-
     info!("Displaying text");
     let mut style = TextStyle::default();
     style.alignment = Alignment::Left;
@@ -96,10 +91,12 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(4).await;
 
     info!("Changing to partial refresh mode");
-    expect!(
-        epd.set_refresh_mode(&mut spi, RefreshMode::Partial).await,
+    let mut epd = expect!(
+        epd.configure_refresh_mode(&mut spi, RefreshModePartial).await,
         "Failed to set refresh mode"
     );
+    buffer.clear(BinaryColor::On).unwrap();
+    epd.write_base_framebuffer(&mut spi, &buffer).await.unwrap();
 
     info!("Displaying check buffer");
     let before_buffer_draw = Instant::now();
@@ -171,7 +168,7 @@ async fn main(_spawner: Spawner) {
     );
     Timer::after_secs(4).await;
 
-    epd.set_refresh_mode(&mut spi, RefreshMode::Full)
+    let mut epd = epd.configure_refresh_mode(&mut spi, RefreshModeFull)
         .await
         .unwrap();
     buffer.clear(BinaryColor::On).unwrap();
