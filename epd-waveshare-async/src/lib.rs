@@ -26,10 +26,8 @@
 //! - `<display>` modules: each display lives in its own module, such as `epd2in9` for the 2.9"
 //!   e-paper display.
 #![no_std]
+#![allow(async_fn_in_trait)]
 
-use embedded_graphics::{
-    prelude::DrawTarget,
-};
 use embedded_hal_async::spi::SpiDevice;
 
 pub mod buffer;
