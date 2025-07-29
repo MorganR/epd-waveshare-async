@@ -7,7 +7,7 @@ use embedded_hal::{
     digital::OutputPin,
     spi::{Phase, Polarity},
 };
-use embedded_hal_async::{delay::DelayNs, spi::SpiDevice};
+use embedded_hal_async::delay::DelayNs;
 
 use crate::{
     buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView}, hw::CommandDataSend as _, log::{debug, debug_assert, warn_log}, DisplayPartial, DisplaySimple, Displayable, EpdHw, Reset, Sleep
@@ -52,143 +52,82 @@ const GATE_VOLTAGE_PARTIAL_UPDATE: [u8; 1] = [0x17];
 const SOURCE_VOLTAGE_PARTIAL_UPDATE: [u8; 3] = [0x41, 0xB0, 0x32];
 const VCOM_PARTIAL_UPDATE: [u8; 1] = [0x36];
 
-#[cfg(feature = "defmt")]
-pub trait RefreshModeBase: defmt::Format + Copy + PartialEq + Eq {}
-#[cfg(not(feature = "defmt"))]
-trait RefreshModeBase: Copy + PartialEq + Eq {}
-
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RefreshModeUnset;
-impl RefreshModeBase for RefreshModeUnset {}
-
 /// The refresh mode for the display.
-trait RefreshModeInternal: RefreshModeBase {
-    /// Returns the border waveform setting to use for this refresh mode.
-    fn border_waveform(&self) -> &'static [u8];
-
-    /// Returns the LUT to use for this refresh mode.
-    fn lut(&self) -> &'static [u8];
-
-    fn lut_magic(&self) -> &'static [u8];
-
-    fn gate_voltage(&self) -> &'static [u8];
-
-    fn source_voltage(&self) -> &'static [u8];
-
-    fn vcom(&self) -> &'static [u8];
-
-    /// Returns the value to set for [Command::DisplayUpdateControl2] when using this refresh mode.
-    fn display_update_control_2(&self) -> &'static [u8];
-
-    fn needs_display_mode_2(&self) -> bool;
+pub enum RefreshMode {
+    /// Use the full update LUT. This is slower, but should be done occasionally to avoid ghosting.
+    ///
+    /// It's recommended to avoid full refreshes less than [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] apart,
+    /// but to do a full refresh at least every [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
+    Full,
+    /// Uses the partial update LUT for fast refresh. A full refresh should be done occasionally to
+    /// avoid ghosting, see [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
+    ///
+    /// This is the standard "fast" update. It diffs the current framebuffer against the
+    /// previous framebuffer, and just updates the pixels that differ.
+    ///
+    /// TODO: This doesn't work yet.
+    Partial,
 }
 
-/// Indicates that a refresh mode supports binary colour data.
-trait RefreshModeBinary {}
-
-// Private bounds are intentional to prevent new refresh modes being introduced externally.
-#[allow(private_bounds)] 
-pub trait RefreshMode: RefreshModeInternal {}
-
-impl <M: RefreshModeInternal> RefreshMode for M { }
-
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Use the full update LUT. This is slower, but should be done occasionally to avoid ghosting.
-///
-/// It's recommended to avoid full refreshes less than [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] apart,
-/// but to do a full refresh at least every [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
-pub struct RefreshModeFull;
-
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Uses the partial update LUT for fast refresh. A full refresh should be done occasionally to
-/// avoid ghosting, see [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
-///
-/// This is the standard "fast" update. It diffs the current framebuffer against the
-/// previous framebuffer, and just updates the pixels that differ.
-///
-/// TODO: This doesn't work yet.
-pub struct RefreshModePartial;
-
-macro_rules! impl_refresh_mode {
-    ($mode:ident {
-        border_waveform: $border_waveform:expr,
-        lut: $lut:expr,
-        lut_magic: $lut_magic:expr,
-        gate_voltage: $gate_voltage:expr,
-        source_voltage: $source_voltage:expr,
-        vcom: $vcom:expr,
-        display_update_control_2: $display_update_control_2:expr,
-        needs_display_mode_2: $needs_display_mode_2:expr,
-    }) => {
-    impl RefreshModeBase for $mode {}
-
-    impl RefreshModeInternal for $mode {
-        fn border_waveform(&self) -> &'static [u8] {
-            $border_waveform
+impl RefreshMode {
+    /// Returns the border waveform setting to use for this refresh mode.
+    pub fn border_waveform(&self) -> &[u8] {
+        match self {
+            RefreshMode::Full => &[0x05],
+            RefreshMode::Partial => &[0x80],
             // Grey: 0x04
         }
+    }
 
-        fn lut(&self) -> &'static [u8] {
-            $lut
+    /// Returns the LUT to use for this refresh mode.
+    pub fn lut(&self) -> &[u8] {
+        match self {
+            RefreshMode::Full => &LUT_FULL_UPDATE,
+            _ => &LUT_PARTIAL_UPDATE,
         }
+    }
 
-        fn lut_magic(&self) -> &'static [u8] {
-            $lut_magic
+    pub fn lut_magic(&self) -> &[u8] {
+        match self {
+            RefreshMode::Full => &LUT_MAGIC_FULL_UPDATE,
+            RefreshMode::Partial => &LUT_MAGIC_PARTIAL_UPDATE,
         }
+    }
 
-        fn gate_voltage(&self) -> &'static [u8] {
-            $gate_voltage
+    pub fn gate_voltage(&self) -> &[u8] {
+        match self {
+            RefreshMode::Full => &GATE_VOLTAGE_FULL_UPDATE,
+            RefreshMode::Partial => &GATE_VOLTAGE_PARTIAL_UPDATE,
         }
+    }
 
-        fn source_voltage(&self) -> &'static [u8] {
-            $source_voltage
+    pub fn source_voltage(&self) -> &[u8] {
+        match self {
+            RefreshMode::Full => &SOURCE_VOLTAGE_FULL_UPDATE,
+            RefreshMode::Partial => &SOURCE_VOLTAGE_PARTIAL_UPDATE,
         }
+    }
 
-        fn vcom(&self) -> &'static [u8] {
-            $vcom
+    pub fn vcom(&self) -> &[u8] {
+        match self {
+            RefreshMode::Full => &VCOM_FULL_UPDATE,
+            RefreshMode::Partial => &VCOM_PARTIAL_UPDATE,
         }
+    }
 
-        fn display_update_control_2(&self) -> &'static [u8] {
-            $display_update_control_2
+    /// Returns the value to set for [Command::DisplayUpdateControl2] when using this refresh mode.
+    pub fn display_update_control_2(&self) -> &[u8] {
+        match self {
+            // We use 0xCF (similar to 0x0F in sample code) because we need to enable clock and
+            // analog. These are already enabled elsewhere in the sample code, but we do a slightly
+            // different set up.
+            RefreshMode::Partial => &[0xCF],
+            _ => &[0xC7],
         }
-
-        fn needs_display_mode_2(&self) -> bool {
-            $needs_display_mode_2
-        }
-    }  
-    };
+    }
 }
-
-impl_refresh_mode!(
-    RefreshModeFull {
-        border_waveform: &[0x05],
-        lut: &LUT_FULL_UPDATE,
-        lut_magic: &LUT_MAGIC_FULL_UPDATE,
-        gate_voltage: &GATE_VOLTAGE_FULL_UPDATE,
-        source_voltage: &SOURCE_VOLTAGE_FULL_UPDATE,
-        vcom: &VCOM_FULL_UPDATE,
-        display_update_control_2: &[0xC7],
-        needs_display_mode_2: false,
-    }
-);
-impl RefreshModeBinary for RefreshModeFull {}
-
-impl_refresh_mode!(
-    RefreshModePartial {
-        border_waveform: &[0x80],
-        lut: &LUT_PARTIAL_UPDATE,
-        lut_magic: &LUT_MAGIC_PARTIAL_UPDATE,
-        gate_voltage: &GATE_VOLTAGE_PARTIAL_UPDATE,
-        source_voltage: &SOURCE_VOLTAGE_PARTIAL_UPDATE,
-        vcom: &VCOM_PARTIAL_UPDATE,
-        display_update_control_2: &[0xCF],
-        needs_display_mode_2: true,
-    }
-);
-impl RefreshModeBinary for RefreshModePartial {}
 
 /// The height of the display (portrait orientation).
 pub const DISPLAY_HEIGHT: u16 = 296;
@@ -349,30 +288,26 @@ const DRIVER_OUTPUT_INIT_DATA: [u8; 3] = [0x27, 0x01, 0x00];
 /// The display has a portrait orientation. This uses [BinaryColor], where `Off` is black and `On` is white.
 ///
 /// 4-color greyscale is not yet supported.
-pub struct Epd2In9V2<HW, MODE>
+pub struct Epd2In9V2<HW>
 where
     HW: EpdHw,
-    MODE: RefreshModeBase,
 {
     hw: HW,
-    refresh_mode: MODE,
+    refresh_mode: Option<RefreshMode>,
 }
 
-impl <HW: EpdHw> Epd2In9V2<HW, RefreshModeUnset> {
+impl<HW> Epd2In9V2<HW>
+where
+    HW: EpdHw,
+{
     pub fn new(hw: HW) -> Self {
         Epd2In9V2 {
             hw,
-            refresh_mode: RefreshModeUnset {},
+            refresh_mode: None,
         }
     }
-}
 
-impl<HW, MODE> Epd2In9V2<HW, MODE>
-where
-    HW: EpdHw,
-    MODE: RefreshModeBase,
-{
-    pub async fn init<R: RefreshMode>(mut self, spi: &mut HW::Spi, mode: R) -> Result<Epd2In9V2<HW, R>, HW::Error> {
+    pub async fn init(&mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<(), HW::Error> {
         debug!("Initialising display");
         self.reset().await?;
 
@@ -389,15 +324,23 @@ where
         self.send(spi, Command::DisplayUpdateControl1, &[0x00, 0x80])
             .await?;
 
-        self.configure_refresh_mode(spi, mode).await
+        self.set_refresh_mode(spi, mode).await
     }
 
-    pub async fn configure_refresh_mode<R: RefreshMode>(
-        mut self,
+    pub async fn set_refresh_mode(
+        &mut self,
         spi: &mut <HW as EpdHw>::Spi,
-        mode: R,
-    ) -> Result<Epd2In9V2<HW, R>, <HW as EpdHw>::Error> {
+        mode: RefreshMode,
+    ) -> Result<(), <HW as EpdHw>::Error> {
+        // Update the LUT only if needed.
+        match self.refresh_mode {
+            Some(old_mode) if old_mode == mode => return Ok(()),
+            _ => {}
+        }
+
         debug!("Changing refresh mode to {:?}", mode);
+        self.refresh_mode = Some(mode);
+
         self.send(spi, Command::SetBorderWaveform, mode.border_waveform())
             .await?;
 
@@ -410,7 +353,7 @@ where
             .await?;
         self.send(spi, Command::WriteVcom, mode.vcom()).await?;
 
-        if mode.needs_display_mode_2() {
+        if mode == RefreshMode::Partial {
             // Mystery undocumented command from sample code.
             self.hw
                 .send(
@@ -425,12 +368,7 @@ where
             self.send(spi, Command::MasterActivation, &[]).await?;
         }
 
-        Ok(
-            Epd2In9V2 {
-                hw: self.hw,
-                refresh_mode: mode,
-            }
-        )
+        Ok(())
     }
 
     /// Sets the window to which the next image data will be written.
@@ -442,8 +380,6 @@ where
         spi: &mut HW::Spi,
         shape: Rectangle,
     ) -> Result<(), <HW as EpdHw>::Error> {
-        // TODO: Move internals to a helper function to reduce code size.
-
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
         let x_start = shape.top_left.x;
@@ -479,8 +415,6 @@ where
         spi: &mut HW::Spi,
         position: Point,
     ) -> Result<(), <HW as EpdHw>::Error> {
-        // TODO: Move internals to a helper function to reduce code size.
-
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
         debug_assert_eq!(position.x % 8, 0, "position.x must be 8-bit aligned");
@@ -503,7 +437,7 @@ where
     }
 }
 
-impl <HW: EpdHw, R: RefreshModeBase> Reset<HW::Error> for Epd2In9V2<HW, R> {
+impl <HW: EpdHw> Reset<HW::Error> for Epd2In9V2<HW> {
     async fn reset(&mut self) -> Result<(), HW::Error> {
         debug!("Resetting EPD");
         // Assume reset is already high.
@@ -515,7 +449,7 @@ impl <HW: EpdHw, R: RefreshModeBase> Reset<HW::Error> for Epd2In9V2<HW, R> {
     }
 }
 
-impl <HW: EpdHw, R: RefreshModeBase> Sleep<HW::Spi, HW::Error> for Epd2In9V2<HW, R> {
+impl <HW: EpdHw> Sleep<HW::Spi, HW::Error> for Epd2In9V2<HW> {
     async fn sleep(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
         debug!("Sleeping EPD");
         self.send(spi, Command::DeepSleepMode, &[0x01]).await
@@ -529,23 +463,27 @@ impl <HW: EpdHw, R: RefreshModeBase> Sleep<HW::Spi, HW::Error> for Epd2In9V2<HW,
     }
 }
 
-impl <HW: EpdHw, R: RefreshMode> Displayable<HW::Spi, HW::Error> for Epd2In9V2<HW, R> {
+impl <HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9V2<HW> {
     async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
         debug!("Updating display");
 
-        self.send(
-            spi,
-            Command::DisplayUpdateControl2,
-            self.refresh_mode.display_update_control_2(),
-        )
-        .await?;
+        if let Some(mode) = self.refresh_mode {
+            self.send(
+                spi,
+                Command::DisplayUpdateControl2,
+                mode.display_update_control_2(),
+            )
+            .await?;
+        } else {
+            warn_log!("Display used before being initialised");
+        }
 
         self.send(spi, Command::MasterActivation, &[]).await?;
         Ok(())
     }
 }
 
-impl <HW: EpdHw, R: RefreshModeBinary + RefreshMode> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, R> {
+impl <HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW> {
     async fn display_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
@@ -568,7 +506,7 @@ impl <HW: EpdHw, R: RefreshModeBinary + RefreshMode> DisplaySimple<1, 1, HW::Spi
     }
 }
 
-impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, RefreshModePartial> {
+impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW> {
     async fn write_base_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
