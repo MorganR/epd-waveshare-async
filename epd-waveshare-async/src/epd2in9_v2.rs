@@ -7,10 +7,10 @@ use embedded_hal::{
     digital::OutputPin,
     spi::{Phase, Polarity},
 };
-use embedded_hal_async::delay::DelayNs;
+use embedded_hal_async::{delay::DelayNs, spi::SpiDevice};
 
 use crate::{
-    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView}, hw::CommandDataSend as _, log::{debug, debug_assert}, DisplayPartial, DisplaySimple, Displayable, EpdHw, Reset, Sleep
+    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView}, hw::CommandDataSend as _, log::{debug, debug_assert, warn_log}, DisplayPartial, DisplaySimple, Displayable, EpdHw, Reset, Sleep
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -349,7 +349,6 @@ const DRIVER_OUTPUT_INIT_DATA: [u8; 3] = [0x27, 0x01, 0x00];
 /// The display has a portrait orientation. This uses [BinaryColor], where `Off` is black and `On` is white.
 ///
 /// 4-color greyscale is not yet supported.
-#[allow(private_bounds)]
 pub struct Epd2In9V2<HW, MODE>
 where
     HW: EpdHw,
@@ -368,7 +367,6 @@ impl <HW: EpdHw> Epd2In9V2<HW, RefreshModeUnset> {
     }
 }
 
-#[allow(private_bounds)]
 impl<HW, MODE> Epd2In9V2<HW, MODE>
 where
     HW: EpdHw,

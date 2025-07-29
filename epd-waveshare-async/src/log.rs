@@ -18,13 +18,23 @@ macro_rules! trace {
     };
 }
 
-macro_rules! debug_assert {
-    ($assertion:expr, $message:expr) => {
+macro_rules! warn_log {
+    ($($arg:tt)*) => {
         #[cfg(feature = "defmt")]
-        defmt::debug_assert!($assertion, $message);
-        #[cfg(not(feature = "defmt"))]
-        core::debug_assert!($assertion, $message);
+        defmt::warn!($($arg)*);
+
+        #[cfg(feature = "log")]
+        log::warn!($($arg)*);
     };
 }
 
-pub(crate) use {debug, debug_assert, trace};
+macro_rules! debug_assert {
+    ($assertion:expr, $message:expr) => {
+        #[cfg(feature = "defmt")]
+        defmt::debug_assert!($assertion, $message,);
+        #[cfg(not(feature = "defmt"))]
+        debug_assert!($assertion, $message,);
+    };
+}
+
+pub(crate) use {debug, debug_assert, trace, warn_log};
