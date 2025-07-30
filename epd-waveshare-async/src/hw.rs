@@ -20,7 +20,7 @@ use crate::log::trace;
 /// use embassy_rp::spi::{self, Spi};
 /// use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 /// use embassy_time::Delay;
-/// use epd_waveshare_async::EpdHw;
+/// use epd_waveshare_async::{EpdHw, Error as EpdError};
 /// use thiserror::Error as ThisError;
 ///
 /// /// Define an error type that can convert from the SPI and GPIO errors.
@@ -28,6 +28,7 @@ use crate::log::trace;
 /// enum Error {
 ///   #[error("SPI error: {0:?}")]
 ///   SpiError(SpiDeviceError<spi::Error, Infallible>),
+///   DisplayError(EpdError),
 /// }
 ///
 /// impl From<Infallible> for Error {
@@ -40,6 +41,12 @@ use crate::log::trace;
 /// impl From<SpiDeviceError<spi::Error, Infallible>> for Error {
 ///     fn from(e: SpiDeviceError<spi::Error, Infallible>) -> Self {
 ///         Error::SpiError(e)
+///     }
+/// }
+/// 
+/// impl From<EpdError> for Error {
+///     fn from(e: EpdError) -> Self {
+///         Error::DisplayError(e)
 ///     }
 /// }
 ///
@@ -86,7 +93,8 @@ pub trait EpdHw {
         + From<<Self::Spi as SpiErrorType>::Error>
         + From<<Self::Dc as PinErrorType>::Error>
         + From<<Self::Reset as PinErrorType>::Error>
-        + From<<Self::Busy as PinErrorType>::Error>;
+        + From<<Self::Busy as PinErrorType>::Error>
+        + From<crate::Error>;
 
     fn dc(&mut self) -> &mut Self::Dc;
     fn reset(&mut self) -> &mut Self::Reset;

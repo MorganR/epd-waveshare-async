@@ -26,6 +26,7 @@
 //! - `<display>` modules: each display lives in its own module, such as `epd2in9` for the 2.9"
 //!   e-paper display.
 #![no_std]
+#![allow(async_fn_in_trait)]
 
 use embedded_graphics::{
     prelude::DrawTarget,
@@ -41,6 +42,19 @@ mod log;
 
 use crate::buffer::BufferView;
 pub use crate::hw::EpdHw;
+
+/// Indicates display errors due to incorrect states.
+/// 
+/// These errors are allowed to occur as runtime errors instead of being prevented at compile time
+/// through stateful types. The alternative was tried, but was awkward to use in practice since
+/// async traits are not dyn compatible.
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone)]
+pub enum Error {
+    Uninitialized,
+    Sleeping,
+    WrongRefreshMode,
+}
 
 pub trait Reset<ERROR> {
     /// Hardware resets the display.
