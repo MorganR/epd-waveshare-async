@@ -10,7 +10,7 @@ use embedded_hal::{
 use embedded_hal_async::delay::DelayNs;
 
 use crate::{
-    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView}, hw::CommandDataSend as _, log::{debug, debug_assert, warn_log}, DisplayPartial, DisplaySimple, Displayable, EpdHw, Reset, Sleep
+    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView}, hw::CommandDataSend as _, log::{debug, debug_assert, warn_log}, DisplayPartial, DisplaySimple, Displayable, EpdHw, Error, Reset, Sleep
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -294,6 +294,14 @@ where
 {
     hw: HW,
     refresh_mode: Option<RefreshMode>,
+    state: State,
+}
+
+#[derive(PartialEq)]
+enum State {
+    Uninitialized,
+    Awake,
+    Asleep,
 }
 
 impl<HW> Epd2In9V2<HW>
@@ -304,6 +312,7 @@ where
         Epd2In9V2 {
             hw,
             refresh_mode: None,
+            state: State::Uninitialized,
         }
     }
 
@@ -332,6 +341,8 @@ where
         spi: &mut <HW as EpdHw>::Spi,
         mode: RefreshMode,
     ) -> Result<(), <HW as EpdHw>::Error> {
+        self.verify_awake_and_init()?;
+
         // Update the LUT only if needed.
         match self.refresh_mode {
             Some(old_mode) if old_mode == mode => return Ok(()),
@@ -380,6 +391,8 @@ where
         spi: &mut HW::Spi,
         shape: Rectangle,
     ) -> Result<(), <HW as EpdHw>::Error> {
+        self.verify_awake_and_init()?;
+
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
         let x_start = shape.top_left.x;
@@ -415,6 +428,8 @@ where
         spi: &mut HW::Spi,
         position: Point,
     ) -> Result<(), <HW as EpdHw>::Error> {
+        self.verify_awake_and_init()?;
+
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
         debug_assert_eq!(position.x % 8, 0, "position.x must be 8-bit aligned");
@@ -433,7 +448,26 @@ where
         command: Command,
         data: &[u8],
     ) -> Result<(), HW::Error> {
+        if self.state == State::Asleep {
+            Err(Error::Sleeping)?;
+        }
+
         self.hw.send(spi, command.register(), data).await
+    }
+
+    fn verify_awake_and_init(&self) -> Result<(), Error> {
+        match self.state {
+            State::Awake => Ok(()),
+            State::Uninitialized => Err(Error::Uninitialized),
+            State::Asleep => Err(Error::Sleeping)
+        }
+    }
+
+    fn verify_partial_supported(&self) -> Result<(), Error> {
+        match self.refresh_mode {
+            Some(RefreshMode::Partial) => Ok(()),
+            _ => Err(Error::WrongRefreshMode),
+        }
     }
 }
 
@@ -445,26 +479,33 @@ impl <HW: EpdHw> Reset<HW::Error> for Epd2In9V2<HW> {
         self.hw.delay().delay_ms(10).await;
         self.hw.reset().set_high()?;
         self.hw.delay().delay_ms(10).await;
+        self.state = State::Awake;
         Ok(())
     }
 }
 
 impl <HW: EpdHw> Sleep<HW::Spi, HW::Error> for Epd2In9V2<HW> {
     async fn sleep(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+        if self.state == State::Asleep {
+            return Ok(());
+        }
+
         debug!("Sleeping EPD");
-        self.send(spi, Command::DeepSleepMode, &[0x01]).await
+        self.send(spi, Command::DeepSleepMode, &[0x01]).await?;
+        self.state = State::Asleep;
+        Ok(())
     }
 
     async fn wake(&mut self, _spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
         debug!("Waking EPD");
         self.reset().await
-
-        // self.init(spi, self.refresh_mode.unwrap_or(RefreshMode::Full)).await
+        // State is updated inside reset.
     }
 }
 
 impl <HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9V2<HW> {
     async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+        self.verify_awake_and_init()?;
         debug!("Updating display");
 
         if let Some(mode) = self.refresh_mode {
@@ -512,6 +553,8 @@ impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW> {
         spi: &mut HW::Spi,
         buf: &dyn BufferView<1, 1>,
     ) -> Result<(), HW::Error> {
+        self.verify_partial_supported()?;
+        // Awake and init is verified in window and cursor commands.
         let buffer_bounds = buf.window();
         self.set_window(spi, buffer_bounds).await?;
         self.set_cursor(spi, buffer_bounds.top_left).await?;
@@ -523,6 +566,8 @@ impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW> {
         spi: &mut HW::Spi,
         buf: &dyn BufferView<1, 1>,
     ) -> Result<(), HW::Error> {
+        self.verify_partial_supported()?;
+        // Awake and init is verified in window and cursor commands.
         self.write_framebuffer(spi, buf).await
     }
 }
