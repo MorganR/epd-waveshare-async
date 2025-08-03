@@ -58,17 +58,26 @@ pub enum Error {
 
 /// Displays that have a hardware reset.
 pub trait Reset<ERROR> {
+    type DisplayOut;
+
     /// Hardware resets the display.
-    async fn reset(&mut self) -> Result<(), ERROR>;
+    async fn reset(self) -> Result<Self::DisplayOut, ERROR>;
 }
 
 /// Displays that can sleep to save power.
 pub trait Sleep<SPI: SpiDevice, ERROR> {
+    type DisplayOut;
+
     /// Puts the display to sleep.
-    async fn sleep(&mut self, spi: &mut SPI) -> Result<(), ERROR>;
+    async fn sleep(self, spi: &mut SPI) -> Result<Self::DisplayOut, ERROR>;
+}
+
+/// Displays that can be woken from a sleep state.
+pub trait Wake<SPI: SpiDevice, ERROR> {
+    type DisplayOut;
 
     /// Wakes and re-initialises the display (if necessary) if it's asleep.
-    async fn wake(&mut self, spi: &mut SPI) -> Result<(), ERROR>;
+    async fn wake(self, spi: &mut SPI) -> Result<Self::DisplayOut, ERROR>;
 }
 
 /// Base trait for any display where the display can be updated separate from its framebuffer data.

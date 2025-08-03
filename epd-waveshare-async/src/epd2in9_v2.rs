@@ -1,4 +1,4 @@
-use core::time::Duration;
+use core::{marker::PhantomData, time::Duration};
 use embedded_graphics::{
     prelude::{Point, Size},
     primitives::Rectangle,
@@ -10,7 +10,7 @@ use embedded_hal::{
 use embedded_hal_async::delay::DelayNs;
 
 use crate::{
-    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView}, hw::CommandDataSend as _, log::{debug, debug_assert, warn_log}, DisplayPartial, DisplaySimple, Displayable, EpdHw, Error, Reset, Sleep
+    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView}, hw::CommandDataSend as _, log::{debug, debug_assert, warn_log}, DisplayPartial, DisplaySimple, Displayable, EpdHw, Error, Reset, Sleep, Wake
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -288,37 +288,64 @@ const DRIVER_OUTPUT_INIT_DATA: [u8; 3] = [0x27, 0x01, 0x00];
 /// The display has a portrait orientation. This uses [BinaryColor], where `Off` is black and `On` is white.
 ///
 /// 4-color greyscale is not yet supported.
-pub struct Epd2In9V2<HW>
+pub struct Epd2In9V2<HW, STATE>
 where
     HW: EpdHw,
+    STATE: State,
 {
     hw: HW,
-    refresh_mode: Option<RefreshMode>,
-    state: State,
+    state: STATE,
 }
 
-#[derive(PartialEq)]
-enum State {
-    Uninitialized,
-    Awake,
-    Asleep,
+trait StateInternal {}
+pub trait State: StateInternal {}
+pub trait StateAwake: State {}
+
+macro_rules! impl_base_state {
+    ($state:ident) => {
+        impl StateInternal for $state {}
+        impl State for $state {}
+    };
 }
 
-impl<HW> Epd2In9V2<HW>
-where
-    HW: EpdHw,
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct StateUninitialized();
+impl_base_state!(StateUninitialized);
+impl StateAwake for StateUninitialized {}
+
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateReady {
+    mode: RefreshMode
+}
+impl_base_state!(StateReady);
+impl StateAwake for StateReady {}
+
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateAsleep<W: StateAwake> {
+    wake_state: W
+}
+impl <W: StateAwake> StateInternal for StateAsleep<W> {}
+impl <W: StateAwake> State for StateAsleep<W> {}
+
+impl <HW> Epd2In9V2<HW, StateUninitialized>
+where HW: EpdHw
 {
     pub fn new(hw: HW) -> Self {
-        Epd2In9V2 {
-            hw,
-            refresh_mode: None,
-            state: State::Uninitialized,
-        }
+        Epd2In9V2 { hw: hw, state: StateUninitialized() }
     }
+}
 
-    pub async fn init(&mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<(), HW::Error> {
+impl<HW, STATE> Epd2In9V2<HW, STATE>
+where
+    HW: EpdHw,
+    STATE: StateAwake,
+{
+    pub async fn init(mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<Epd2In9V2<HW, StateReady>, HW::Error> {
         debug!("Initialising display");
-        self.reset().await?;
+        self = self.reset().await?;
 
         // Reset all configurations to default.
         self.send(spi, Command::SwReset, &[]).await?;
@@ -333,25 +360,24 @@ where
         self.send(spi, Command::DisplayUpdateControl1, &[0x00, 0x80])
             .await?;
 
-        self.set_refresh_mode(spi, mode).await
+        self.set_refresh_mode_impl(spi, mode).await
     }
 
-    pub async fn set_refresh_mode(
+    /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
+    pub async fn send(
         &mut self,
+        spi: &mut HW::Spi,
+        command: Command,
+        data: &[u8],
+    ) -> Result<(), HW::Error> {
+        self.hw.send(spi, command.register(), data).await
+    }
+
+    async fn set_refresh_mode_impl(
+        mut self,
         spi: &mut <HW as EpdHw>::Spi,
         mode: RefreshMode,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        self.verify_awake_and_init()?;
-
-        // Update the LUT only if needed.
-        match self.refresh_mode {
-            Some(old_mode) if old_mode == mode => return Ok(()),
-            _ => {}
-        }
-
-        debug!("Changing refresh mode to {:?}", mode);
-        self.refresh_mode = Some(mode);
-
+    ) -> Result<Epd2In9V2<HW, StateReady>, <HW as EpdHw>::Error> {
         self.send(spi, Command::SetBorderWaveform, mode.border_waveform())
             .await?;
 
@@ -379,7 +405,23 @@ where
             self.send(spi, Command::MasterActivation, &[]).await?;
         }
 
-        Ok(())
+        Ok(Epd2In9V2 { hw: self.hw, state: StateReady { mode: mode } })
+    }
+}
+
+impl <HW: EpdHw> Epd2In9V2<HW, StateReady> {
+    /// Sets the refresh mode.
+    pub async fn set_refresh_mode(
+        self,
+        spi: &mut HW::Spi,
+        mode: RefreshMode
+    ) -> Result<Self, HW::Error> {
+        if self.state.mode == mode {
+            Ok(self)
+        } else {
+            debug!("Changing refresh mode to {:?}", mode);
+            self.set_refresh_mode_impl(spi, mode).await
+        }
     }
 
     /// Sets the window to which the next image data will be written.
@@ -391,8 +433,6 @@ where
         spi: &mut HW::Spi,
         shape: Rectangle,
     ) -> Result<(), <HW as EpdHw>::Error> {
-        self.verify_awake_and_init()?;
-
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
         let x_start = shape.top_left.x;
@@ -428,8 +468,6 @@ where
         spi: &mut HW::Spi,
         position: Point,
     ) -> Result<(), <HW as EpdHw>::Error> {
-        self.verify_awake_and_init()?;
-
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
         debug_assert_eq!(position.x % 8, 0, "position.x must be 8-bit aligned");
@@ -440,91 +478,75 @@ where
         self.send(spi, Command::SetRamY, &[y_low, y_high]).await?;
         Ok(())
     }
+}
 
-    /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
-    pub async fn send(
-        &mut self,
-        spi: &mut HW::Spi,
-        command: Command,
-        data: &[u8],
-    ) -> Result<(), HW::Error> {
-        if self.state == State::Asleep {
-            Err(Error::Sleeping)?;
-        }
+async fn reset_impl<HW: EpdHw>(hw: &mut HW) -> Result<(), HW::Error> {
+    debug!("Resetting EPD");
+    // Assume reset is already high.
+    hw.reset().set_low()?;
+    hw.delay().delay_ms(10).await;
+    hw.reset().set_high()?;
+    hw.delay().delay_ms(10).await;
+    Ok(())
+}
 
-        self.hw.send(spi, command.register(), data).await
-    }
+impl <HW: EpdHw, STATE: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, STATE> {
+    type DisplayOut = Epd2In9V2<HW, STATE>;
 
-    fn verify_awake_and_init(&self) -> Result<(), Error> {
-        match self.state {
-            State::Awake => Ok(()),
-            State::Uninitialized => Err(Error::Uninitialized),
-            State::Asleep => Err(Error::Sleeping)
-        }
-    }
-
-    fn verify_partial_supported(&self) -> Result<(), Error> {
-        match self.refresh_mode {
-            Some(RefreshMode::Partial) => Ok(()),
-            _ => Err(Error::WrongRefreshMode),
-        }
+    async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
+        reset_impl(&mut self.hw).await?;
+        Ok(self)
     }
 }
 
-impl <HW: EpdHw> Reset<HW::Error> for Epd2In9V2<HW> {
-    async fn reset(&mut self) -> Result<(), HW::Error> {
-        debug!("Resetting EPD");
-        // Assume reset is already high.
-        self.hw.reset().set_low()?;
-        self.hw.delay().delay_ms(10).await;
-        self.hw.reset().set_high()?;
-        self.hw.delay().delay_ms(10).await;
-        self.state = State::Awake;
-        Ok(())
+impl <HW: EpdHw, W: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, StateAsleep<W>> {
+    type DisplayOut = Epd2In9V2<HW, W>;
+
+    async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
+        reset_impl(&mut self.hw).await?;
+        Ok(Epd2In9V2 { hw: self.hw, state: self.state.wake_state })
     }
 }
 
-impl <HW: EpdHw> Sleep<HW::Spi, HW::Error> for Epd2In9V2<HW> {
-    async fn sleep(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
-        if self.state == State::Asleep {
-            return Ok(());
-        }
+impl <HW: EpdHw, STATE: StateAwake> Sleep<HW::Spi, HW::Error> for Epd2In9V2<HW, STATE> {
+    type DisplayOut = Epd2In9V2<HW, StateAsleep<STATE>>;
 
+    async fn sleep(mut self, spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
         debug!("Sleeping EPD");
         self.send(spi, Command::DeepSleepMode, &[0x01]).await?;
-        self.state = State::Asleep;
-        Ok(())
-    }
-
-    async fn wake(&mut self, _spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Waking EPD");
-        self.reset().await
-        // State is updated inside reset.
+        Ok(
+            Epd2In9V2 { hw: self.hw, state: StateAsleep { wake_state: self.state } }
+        )
     }
 }
 
-impl <HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9V2<HW> {
+impl <HW: EpdHw, W: StateAwake> Wake<HW::Spi, HW::Error> for Epd2In9V2<HW, StateAsleep<W>> {
+    type DisplayOut = Epd2In9V2<HW, W>;
+    async fn wake(self, _spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
+        debug!("Waking EPD");
+        self.reset().await
+    }
+}
+
+impl <HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
     async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
-        self.verify_awake_and_init()?;
         debug!("Updating display");
 
-        if let Some(mode) = self.refresh_mode {
-            self.send(
-                spi,
-                Command::DisplayUpdateControl2,
-                mode.display_update_control_2(),
-            )
-            .await?;
-        } else {
-            warn_log!("Display used before being initialised");
-        }
+        let mode = self.state.mode;
+        let update_control = mode.display_update_control_2();
+        self.send(
+            spi,
+            Command::DisplayUpdateControl2,
+            update_control,
+        )
+        .await?;
 
         self.send(spi, Command::MasterActivation, &[]).await?;
         Ok(())
     }
 }
 
-impl <HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW> {
+impl <HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
     async fn display_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
@@ -547,14 +569,12 @@ impl <HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW> {
     }
 }
 
-impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW> {
+impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
     async fn write_base_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
         buf: &dyn BufferView<1, 1>,
     ) -> Result<(), HW::Error> {
-        self.verify_partial_supported()?;
-        // Awake and init is verified in window and cursor commands.
         let buffer_bounds = buf.window();
         self.set_window(spi, buffer_bounds).await?;
         self.set_cursor(spi, buffer_bounds.top_left).await?;
