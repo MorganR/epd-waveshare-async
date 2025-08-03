@@ -432,10 +432,6 @@ impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9<HW> {
         self.set_cursor(spi, buffer_bounds.top_left).await?;
         self.send(spi, Command::WriteOldRam, buf.data()[0]).await
     }
-
-    async fn write_diff_framebuffer(&mut self, spi: &mut HW::Spi, buf: &dyn BufferView<1, 1>) -> Result<(), HW::Error> {
-        self.write_framebuffer(spi, buf).await
-    }
 }
 
 impl <HW: EpdHw> Reset<HW::Error> for Epd2In9<HW> {

@@ -43,7 +43,7 @@ mod log;
 use crate::buffer::BufferView;
 pub use crate::hw::EpdHw;
 
-/// Indicates display errors due to incorrect states.
+/// Indicates usage errors due to incorrect states.
 /// 
 /// These errors are allowed to occur as runtime errors instead of being prevented at compile time
 /// through stateful types. The alternative was tried, but was awkward to use in practice since
@@ -56,6 +56,7 @@ pub enum Error {
     WrongRefreshMode,
 }
 
+/// Displays that have a hardware reset.
 pub trait Reset<ERROR> {
     /// Hardware resets the display.
     async fn reset(&mut self) -> Result<(), ERROR>;
@@ -70,6 +71,7 @@ pub trait Sleep<SPI: SpiDevice, ERROR> {
     async fn wake(&mut self, spi: &mut SPI) -> Result<(), ERROR>;
 }
 
+/// Base trait for any display where the display can be updated separate from its framebuffer data.
 pub trait Displayable<SPI: SpiDevice, ERROR> {
     /// Updates (refreshes) the display based on what has been written to RAM. Note that this can be
     /// stateful, for example displays in [DisplayPartial] mode often swap two underlying
@@ -83,23 +85,28 @@ pub trait Displayable<SPI: SpiDevice, ERROR> {
     async fn update_display(&mut self, spi: &mut SPI) -> Result<(), ERROR>;
 }
 
+/// Simple displays that support writing and displaying framebuffers of a certain bit configuration.
+/// 
+/// `BITS` indicates the colour depth of each frame, and `FRAMES` indicates the total number of frames that
+/// represent a complete image. For example, some 4-colour greyscale displays accept data as two
+/// separate 1-bit frames instead of one frame of 2-bit pixels. This distinction is exposed so that
+/// framebuffers can be written directly to displays without temp copies or transformations.
 pub trait DisplaySimple<const BITS: usize, const FRAMES: usize, SPI: SpiDevice, ERROR>: Displayable<SPI, ERROR> {
+    /// Writes the given buffer's data into the main framebuffer to be displayed on the next call to [Displayable::update_display].
     async fn write_framebuffer(&mut self, spi: &mut SPI, buf: &dyn BufferView<BITS, FRAMES>) -> Result<(), ERROR>;
 
+    /// A shortcut for calling [DisplaySimple::write_framebuffer] followed by [Displayable::update_display].
     async fn display_framebuffer(&mut self, spi: &mut SPI, buf: &dyn BufferView<BITS, FRAMES>) -> Result<(), ERROR>;
 }
 
+/// Displays that support a partial update, where a "diff" framebuffer is diffed against a base
+/// framebuffer, and only the changed pixels from the diff are actually updated.
 pub trait DisplayPartial<const BITS: usize, const FRAMES: usize, SPI: SpiDevice, ERROR>: Displayable<SPI, ERROR> {
-    /// Writes the buffer to the base framebuffer that the "diff" layer will be diffed against.
+    /// Writes the buffer to the base framebuffer that the main framebuffer layer (written with
+    /// [DisplaySimple::write_framebuffer]) will be diffed against.
     /// Only pixels that differ will be updated.
     /// 
-    /// For standard use, you probably only need to call this once before the first partial display.
+    /// For standard use, you probably only need to call this once before the first partial display,
+    /// as the main framebuffer becomes the diff base after a call to [Displayable::update_display].
     async fn write_base_framebuffer(&mut self, spi: &mut SPI, buf: &dyn BufferView<BITS, FRAMES>) -> Result<(), ERROR>;
-    /// Writes the buffer to the diff layer, which will be diffed against the base. Only pixels that
-    /// differ will be updated.
-    /// 
-    /// On calls to [Displayable::update_display], the diff and base framebuffers should
-    /// automatically be swapped. In most cases, this means that [DisplayPartial::write_base_framebuffer]
-    /// only needs to be called once to support repeated partial refreshes.
-    async fn write_diff_framebuffer(&mut self, spi: &mut SPI, buf: &dyn BufferView<BITS, FRAMES>) -> Result<(), ERROR>;
 }

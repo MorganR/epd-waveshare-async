@@ -560,15 +560,5 @@ impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW> {
         self.set_cursor(spi, buffer_bounds.top_left).await?;
         self.send(spi, Command::WriteHighRam, buf.data()[0]).await
     }
-
-    async fn write_diff_framebuffer(
-        &mut self,
-        spi: &mut HW::Spi,
-        buf: &dyn BufferView<1, 1>,
-    ) -> Result<(), HW::Error> {
-        self.verify_partial_supported()?;
-        // Awake and init is verified in window and cursor commands.
-        self.write_framebuffer(spi, buf).await
-    }
 }
 
