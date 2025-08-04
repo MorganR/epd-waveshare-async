@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 npx lint-staged -c "lint-staged.pre-commit.json"
-cargo fmt --all
 cargo fix --allow-staged --allow-dirty
 cd samples/rp
 cargo fix --allow-staged --allow-dirty --bins --target=thumbv6m-none-eabi
