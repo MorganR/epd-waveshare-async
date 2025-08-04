@@ -1,7 +1,9 @@
+#!/usr/bin/env bash
+
 npx lint-staged -c "lint-staged.pre-commit.json"
 cargo fmt --all
 cargo fix --allow-staged --allow-dirty
-push samples/rp-pico
+cd samples/rp
 cargo fix --allow-staged --allow-dirty --bins --target=thumbv6m-none-eabi
-pop
-git update-index -g
+cd ../..
+git add .
