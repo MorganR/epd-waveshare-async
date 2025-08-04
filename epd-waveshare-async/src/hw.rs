@@ -1,6 +1,9 @@
 use core::error::Error as CoreError;
 
-use embedded_hal::{digital::{ErrorType as PinErrorType, InputPin, OutputPin}, spi::ErrorType as SpiErrorType};
+use embedded_hal::{
+    digital::{ErrorType as PinErrorType, InputPin, OutputPin},
+    spi::ErrorType as SpiErrorType,
+};
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
 
 use crate::log::trace;
@@ -43,7 +46,7 @@ use crate::log::trace;
 ///         Error::SpiError(e)
 ///     }
 /// }
-/// 
+///
 /// impl From<EpdError> for Error {
 ///     fn from(e: EpdError) -> Self {
 ///         Error::DisplayError(e)

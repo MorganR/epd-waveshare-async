@@ -10,7 +10,10 @@ use embedded_hal::{
 use embedded_hal_async::delay::DelayNs;
 
 use crate::{
-    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView}, hw::CommandDataSend as _, log::{debug, debug_assert, warn_log}, DisplayPartial, DisplaySimple, Displayable, EpdHw, Error, Reset, Sleep, Wake
+    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView},
+    hw::CommandDataSend as _,
+    log::{debug, debug_assert, warn_log},
+    DisplayPartial, DisplaySimple, Displayable, EpdHw, Error, Reset, Sleep, Wake,
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -263,7 +266,8 @@ impl Command {
 }
 
 /// The length of the underlying buffer used by [Epd2In9V2].
-pub const BINARY_BUFFER_LENGTH: usize = binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32));
+pub const BINARY_BUFFER_LENGTH: usize =
+    binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32));
 /// The buffer type used by [Epd2In9V2].
 pub type Epd2In9BinaryBuffer = BinaryBuffer<BINARY_BUFFER_LENGTH>;
 /// Constructs a new binary buffer for use with the [Epd2In9V2] display.
@@ -310,14 +314,14 @@ macro_rules! impl_base_state {
 
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct StateUninitialized();
+pub struct StateUninitialized();
 impl_base_state!(StateUninitialized);
 impl StateAwake for StateUninitialized {}
 
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StateReady {
-    mode: RefreshMode
+    mode: RefreshMode,
 }
 impl_base_state!(StateReady);
 impl StateAwake for StateReady {}
@@ -325,16 +329,20 @@ impl StateAwake for StateReady {}
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StateAsleep<W: StateAwake> {
-    wake_state: W
+    wake_state: W,
 }
-impl <W: StateAwake> StateInternal for StateAsleep<W> {}
-impl <W: StateAwake> State for StateAsleep<W> {}
+impl<W: StateAwake> StateInternal for StateAsleep<W> {}
+impl<W: StateAwake> State for StateAsleep<W> {}
 
-impl <HW> Epd2In9V2<HW, StateUninitialized>
-where HW: EpdHw
+impl<HW> Epd2In9V2<HW, StateUninitialized>
+where
+    HW: EpdHw,
 {
     pub fn new(hw: HW) -> Self {
-        Epd2In9V2 { hw: hw, state: StateUninitialized() }
+        Epd2In9V2 {
+            hw: hw,
+            state: StateUninitialized(),
+        }
     }
 }
 
@@ -343,7 +351,11 @@ where
     HW: EpdHw,
     STATE: StateAwake,
 {
-    pub async fn init(mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<Epd2In9V2<HW, StateReady>, HW::Error> {
+    pub async fn init(
+        mut self,
+        spi: &mut HW::Spi,
+        mode: RefreshMode,
+    ) -> Result<Epd2In9V2<HW, StateReady>, HW::Error> {
         debug!("Initialising display");
         self = self.reset().await?;
 
@@ -405,16 +417,19 @@ where
             self.send(spi, Command::MasterActivation, &[]).await?;
         }
 
-        Ok(Epd2In9V2 { hw: self.hw, state: StateReady { mode: mode } })
+        Ok(Epd2In9V2 {
+            hw: self.hw,
+            state: StateReady { mode: mode },
+        })
     }
 }
 
-impl <HW: EpdHw> Epd2In9V2<HW, StateReady> {
+impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
     /// Sets the refresh mode.
     pub async fn set_refresh_mode(
         self,
         spi: &mut HW::Spi,
-        mode: RefreshMode
+        mode: RefreshMode,
     ) -> Result<Self, HW::Error> {
         if self.state.mode == mode {
             Ok(self)
@@ -490,7 +505,7 @@ async fn reset_impl<HW: EpdHw>(hw: &mut HW) -> Result<(), HW::Error> {
     Ok(())
 }
 
-impl <HW: EpdHw, STATE: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, STATE> {
+impl<HW: EpdHw, STATE: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, STATE> {
     type DisplayOut = Epd2In9V2<HW, STATE>;
 
     async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
@@ -499,28 +514,34 @@ impl <HW: EpdHw, STATE: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, STATE> {
     }
 }
 
-impl <HW: EpdHw, W: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, StateAsleep<W>> {
+impl<HW: EpdHw, W: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, StateAsleep<W>> {
     type DisplayOut = Epd2In9V2<HW, W>;
 
     async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
         reset_impl(&mut self.hw).await?;
-        Ok(Epd2In9V2 { hw: self.hw, state: self.state.wake_state })
+        Ok(Epd2In9V2 {
+            hw: self.hw,
+            state: self.state.wake_state,
+        })
     }
 }
 
-impl <HW: EpdHw, STATE: StateAwake> Sleep<HW::Spi, HW::Error> for Epd2In9V2<HW, STATE> {
+impl<HW: EpdHw, STATE: StateAwake> Sleep<HW::Spi, HW::Error> for Epd2In9V2<HW, STATE> {
     type DisplayOut = Epd2In9V2<HW, StateAsleep<STATE>>;
 
     async fn sleep(mut self, spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
         debug!("Sleeping EPD");
         self.send(spi, Command::DeepSleepMode, &[0x01]).await?;
-        Ok(
-            Epd2In9V2 { hw: self.hw, state: StateAsleep { wake_state: self.state } }
-        )
+        Ok(Epd2In9V2 {
+            hw: self.hw,
+            state: StateAsleep {
+                wake_state: self.state,
+            },
+        })
     }
 }
 
-impl <HW: EpdHw, W: StateAwake> Wake<HW::Spi, HW::Error> for Epd2In9V2<HW, StateAsleep<W>> {
+impl<HW: EpdHw, W: StateAwake> Wake<HW::Spi, HW::Error> for Epd2In9V2<HW, StateAsleep<W>> {
     type DisplayOut = Epd2In9V2<HW, W>;
     async fn wake(self, _spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
         debug!("Waking EPD");
@@ -528,25 +549,21 @@ impl <HW: EpdHw, W: StateAwake> Wake<HW::Spi, HW::Error> for Epd2In9V2<HW, State
     }
 }
 
-impl <HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
+impl<HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
     async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
         debug!("Updating display");
 
         let mode = self.state.mode;
         let update_control = mode.display_update_control_2();
-        self.send(
-            spi,
-            Command::DisplayUpdateControl2,
-            update_control,
-        )
-        .await?;
+        self.send(spi, Command::DisplayUpdateControl2, update_control)
+            .await?;
 
         self.send(spi, Command::MasterActivation, &[]).await?;
         Ok(())
     }
 }
 
-impl <HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
+impl<HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
     async fn display_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
@@ -569,7 +586,7 @@ impl <HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, State
     }
 }
 
-impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
+impl<HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
     async fn write_base_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
@@ -581,4 +598,3 @@ impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, Stat
         self.send(spi, Command::WriteHighRam, buf.data()[0]).await
     }
 }
-

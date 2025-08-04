@@ -86,7 +86,7 @@ impl<const L: usize> BinaryBuffer<L> {
     }
 }
 
-impl <const L: usize> BufferView<1, 1> for BinaryBuffer<L> {
+impl<const L: usize> BufferView<1, 1> for BinaryBuffer<L> {
     fn window(&self) -> Rectangle {
         Rectangle::new(Point::zero(), self.size)
     }
