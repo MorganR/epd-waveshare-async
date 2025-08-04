@@ -95,7 +95,7 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(4).await;
 
     info!("Changing to partial refresh mode");
-    epd = expect!(
+    expect!(
         epd.set_refresh_mode(&mut spi, RefreshMode::Partial).await,
         "Failed to set refresh mode"
     );
@@ -170,8 +170,7 @@ async fn main(_spawner: Spawner) {
     );
     Timer::after_secs(4).await;
 
-    epd = epd
-        .set_refresh_mode(&mut spi, RefreshMode::Full)
+    epd.set_refresh_mode(&mut spi, RefreshMode::Full)
         .await
         .unwrap();
     buffer.clear(BinaryColor::On).unwrap();

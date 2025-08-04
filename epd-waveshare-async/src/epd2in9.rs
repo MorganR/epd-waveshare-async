@@ -284,7 +284,12 @@ where
         // 2us per line.
         self.send(spi, Command::SetGateLineWidth, &[0x08]).await?;
 
-        self.set_refresh_mode_impl(spi, mode).await
+        let mut epd = Epd2In9 {
+            hw: self.hw,
+            state: StateReady { mode },
+        };
+        epd.set_refresh_mode_impl(spi, mode).await?;
+        Ok(epd)
     }
 
     /// Sets the border to the specified colour. You need to call [Epd::update_display] using
@@ -305,38 +310,6 @@ where
             .await
     }
 
-    async fn set_refresh_mode_impl(
-        mut self,
-        spi: &mut <HW as EpdHw>::Spi,
-        mode: RefreshMode,
-    ) -> Result<Epd2In9<HW, StateReady>, <HW as EpdHw>::Error> {
-        debug!("Changing refresh mode to {:?}", mode);
-
-        self.send(spi, Command::WriteLut, mode.lut()).await?;
-
-        // Update bypass if needed.
-        match mode {
-            RefreshMode::Partial => {
-                self.send(spi, Command::DisplayUpdateControl1, &[0x00])
-                    .await?
-            }
-            RefreshMode::PartialBlackBypass => {
-                self.send(spi, Command::DisplayUpdateControl1, &[0x90])
-                    .await?
-            }
-            RefreshMode::PartialWhiteBypass => {
-                self.send(spi, Command::DisplayUpdateControl1, &[0x80])
-                    .await?
-            }
-            _ => {}
-        }
-
-        Ok(Epd2In9 {
-            hw: self.hw,
-            state: StateReady { mode },
-        })
-    }
-
     /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
     pub async fn send(
         &mut self,
@@ -351,15 +324,16 @@ where
 impl<HW: EpdHw> Epd2In9<HW, StateReady> {
     /// Sets the refresh mode.
     pub async fn set_refresh_mode(
-        self,
+        &mut self,
         spi: &mut HW::Spi,
         mode: RefreshMode,
-    ) -> Result<Self, HW::Error> {
+    ) -> Result<(), HW::Error> {
         if self.state.mode == mode {
-            Ok(self)
+            Ok(())
         } else {
             debug!("Changing refresh mode to {:?}", mode);
-            self.set_refresh_mode_impl(spi, mode).await
+            self.set_refresh_mode_impl(spi, mode).await?;
+            Ok(())
         }
     }
 
@@ -415,6 +389,16 @@ impl<HW: EpdHw> Epd2In9<HW, StateReady> {
             .await?;
         let (y_low, y_high) = split_low_and_high(position.y as u16);
         self.send(spi, Command::SetRamY, &[y_low, y_high]).await?;
+        Ok(())
+    }
+
+    async fn set_refresh_mode_impl(
+        &mut self,
+        spi: &mut HW::Spi,
+        mode: RefreshMode,
+    ) -> Result<(), HW::Error> {
+        self.send(spi, Command::WriteLut, mode.lut()).await?;
+        self.state.mode = mode;
         Ok(())
     }
 }

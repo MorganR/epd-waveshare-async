@@ -76,7 +76,7 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(4).await;
 
     info!("Changing to partial refresh mode");
-    epd = expect!(
+    expect!(
         epd.set_refresh_mode(&mut spi, RefreshMode::Partial).await,
         "Failed to set refresh mode"
     );
@@ -143,8 +143,7 @@ async fn main(_spawner: Spawner) {
         style,
     );
     text.draw(&mut buffer).unwrap();
-    epd = epd
-        .set_refresh_mode(&mut spi, RefreshMode::PartialBlackBypass)
+    epd.set_refresh_mode(&mut spi, RefreshMode::PartialBlackBypass)
         .await
         .unwrap();
     expect!(
@@ -163,8 +162,7 @@ async fn main(_spawner: Spawner) {
     // Cover the right-side of the text.
     buffer.fill_solid(&right_half, BinaryColor::Off).unwrap();
     // Just display white pixels (i.e. same as before plus left side of text).
-    epd = epd
-        .set_refresh_mode(&mut spi, RefreshMode::PartialWhiteBypass)
+    epd.set_refresh_mode(&mut spi, RefreshMode::PartialWhiteBypass)
         .await
         .unwrap();
     expect!(
@@ -181,7 +179,7 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(1).await;
 
     // Prepare for border updates. These require full refresh mode.
-    epd = expect!(
+    expect!(
         epd.set_refresh_mode(&mut spi, RefreshMode::Full).await,
         "Failed to set refresh mode"
     );

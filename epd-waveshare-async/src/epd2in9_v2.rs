@@ -373,7 +373,12 @@ where
         self.send(spi, Command::DisplayUpdateControl1, &[0x00, 0x80])
             .await?;
 
-        self.set_refresh_mode_impl(spi, mode).await
+        let mut epd = Epd2In9V2 {
+            hw: self.hw,
+            state: StateReady { mode },
+        };
+        epd.set_refresh_mode_impl(spi, mode).await?;
+        Ok(epd)
     }
 
     /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
@@ -385,12 +390,29 @@ where
     ) -> Result<(), HW::Error> {
         self.hw.send(spi, command.register(), data).await
     }
+}
+
+impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
+    /// Sets the refresh mode.
+    pub async fn set_refresh_mode(
+        &mut self,
+        spi: &mut HW::Spi,
+        mode: RefreshMode,
+    ) -> Result<(), HW::Error> {
+        if self.state.mode == mode {
+            Ok(())
+        } else {
+            debug!("Changing refresh mode to {:?}", mode);
+            self.set_refresh_mode_impl(spi, mode).await?;
+            Ok(())
+        }
+    }
 
     async fn set_refresh_mode_impl(
-        mut self,
+        &mut self,
         spi: &mut <HW as EpdHw>::Spi,
         mode: RefreshMode,
-    ) -> Result<Epd2In9V2<HW, StateReady>, <HW as EpdHw>::Error> {
+    ) -> Result<(), <HW as EpdHw>::Error> {
         self.send(spi, Command::SetBorderWaveform, mode.border_waveform())
             .await?;
 
@@ -417,27 +439,9 @@ where
                 .await?;
             self.send(spi, Command::MasterActivation, &[]).await?;
         }
+        self.state.mode = mode;
 
-        Ok(Epd2In9V2 {
-            hw: self.hw,
-            state: StateReady { mode },
-        })
-    }
-}
-
-impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
-    /// Sets the refresh mode.
-    pub async fn set_refresh_mode(
-        self,
-        spi: &mut HW::Spi,
-        mode: RefreshMode,
-    ) -> Result<Self, HW::Error> {
-        if self.state.mode == mode {
-            Ok(self)
-        } else {
-            debug!("Changing refresh mode to {:?}", mode);
-            self.set_refresh_mode_impl(spi, mode).await
-        }
+        Ok(())
     }
 
     /// Sets the window to which the next image data will be written.
