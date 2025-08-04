@@ -1,7 +1,7 @@
 use core::time::Duration;
 use embedded_graphics::{
     pixelcolor::BinaryColor,
-    prelude::{Dimensions, Point, Size},
+    prelude::{Point, Size},
     primitives::Rectangle,
 };
 use embedded_hal::{
@@ -11,7 +11,7 @@ use embedded_hal::{
 use embedded_hal_async::delay::DelayNs;
 
 use crate::{
-    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView}, hw::CommandDataSend as _, log::{debug, debug_assert}, DisplayPartial, DisplaySimple, Displayable, EpdHw, Reset, Sleep
+    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView}, hw::CommandDataSend as _, log::{debug, debug_assert}, DisplayPartial, DisplaySimple, Displayable, EpdHw, Reset, Sleep, Wake
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -188,29 +188,65 @@ const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xD7, 0xD6, 0x9D];
 /// * [sample code](https://github.com/waveshareteam/e-Paper/blob/master/RaspberryPi_JetsonNano/python/lib/waveshare_epd/epd2in9.py)
 ///
 /// The display has a portrait orientation. This uses [BinaryColor], where `Off` is black and `On` is white.
-pub struct Epd2In9<HW>
+pub struct Epd2In9<HW, STATE>
 where
     HW: EpdHw,
+    STATE: State,
 {
     hw: HW,
-    refresh_mode: Option<RefreshMode>,
+    state: STATE,
 }
 
-impl<HW> Epd2In9<HW>
-where
-    HW: EpdHw,
+trait StateInternal {}
+pub trait State: StateInternal {}
+pub trait StateAwake: State {}
+
+macro_rules! impl_base_state {
+    ($state:ident) => {
+        impl StateInternal for $state {}
+        impl State for $state {}
+    };
+}
+
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct StateUninitialized();
+impl_base_state!(StateUninitialized);
+impl StateAwake for StateUninitialized {}
+
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateReady {
+    mode: RefreshMode
+}
+impl_base_state!(StateReady);
+impl StateAwake for StateReady {}
+
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateAsleep<W: StateAwake> {
+    wake_state: W
+}
+impl <W: StateAwake> StateInternal for StateAsleep<W> {}
+impl <W: StateAwake> State for StateAsleep<W> {}
+
+impl <HW> Epd2In9<HW, StateUninitialized>
+where HW: EpdHw
 {
     pub fn new(hw: HW) -> Self {
-        Epd2In9 {
-            hw,
-            refresh_mode: None,
-        }
+        Epd2In9 { hw: hw, state: StateUninitialized() }
     }
+}
 
-    /// Initialise the display. This must be called before any other operations.
-    pub async fn init(&mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<(), HW::Error> {
+impl<HW, STATE> Epd2In9<HW, STATE>
+where
+    HW: EpdHw,
+    STATE: StateAwake,
+{
+    /// Initialise the display. This should be called before any other operations.
+    pub async fn init(mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<Epd2In9<HW, StateReady>, HW::Error> {
         debug!("Initialising display");
-        self.reset().await?;
+        self = self.reset().await?;
 
         // Reset all configurations to default.
         self.send(spi, Command::SwReset, &[]).await?;
@@ -235,7 +271,7 @@ where
         // 2us per line.
         self.send(spi, Command::SetGateLineWidth, &[0x08]).await?;
 
-        self.set_refresh_mode(spi, mode).await
+        self.set_refresh_mode_impl(spi, mode).await
     }
 
     /// Sets the border to the specified colour. You need to call [Epd::update_display] using
@@ -256,58 +292,59 @@ where
             .await
     }
 
-    pub async fn set_refresh_mode(
-        &mut self,
+    async fn set_refresh_mode_impl(
+        mut self,
         spi: &mut <HW as EpdHw>::Spi,
         mode: RefreshMode,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        // Update the LUT only if needed.
-        match self.refresh_mode {
-            Some(old_mode) if old_mode == mode => return Ok(()),
-            Some(old_mode) if old_mode.lut() != mode.lut() => {
-                self.send(spi, Command::WriteLut, mode.lut()).await?;
-            }
-            None => {
-                self.send(spi, Command::WriteLut, mode.lut()).await?;
-            }
-            _ => {}
-        }
-
+    ) -> Result<Epd2In9<HW, StateReady>, <HW as EpdHw>::Error> {
         debug!("Changing refresh mode to {:?}", mode);
-        self.refresh_mode = Some(mode);
+
+        self.send(spi, Command::WriteLut, mode.lut()).await?;
 
         // Update bypass if needed.
         match mode {
             RefreshMode::Partial => {
                 self.send(spi, Command::DisplayUpdateControl1, &[0x00])
-                    .await
+                    .await?
             }
             RefreshMode::PartialBlackBypass => {
                 self.send(spi, Command::DisplayUpdateControl1, &[0x90])
-                    .await
+                    .await?
             }
             RefreshMode::PartialWhiteBypass => {
                 self.send(spi, Command::DisplayUpdateControl1, &[0x80])
-                    .await
+                    .await?
             }
-            _ => Ok(()),
+            _ => {}
         }
+
+        Ok(Epd2In9 { hw: self.hw, state: StateReady { mode: mode } })
     }
 
-    /// Writes buffer data into the old internal framebuffer. This can be useful either:
-    ///
-    /// * to prep the next frame before the current one has been displayed (since the old buffer
-    ///   becomes the current buffer after the next call to [Self::update_display()]).
-    /// * to modify the "diff" that is displayed if in [RefreshMode::Partial]. Also see [Command::DisplayUpdateControl1].
-    pub async fn write_old_framebuffer(
+    /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
+    pub async fn send(
         &mut self,
         spi: &mut HW::Spi,
-        buffer: &Epd2In9Buffer,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        let buffer_bounds = buffer.bounding_box();
-        self.set_window(spi, buffer_bounds).await?;
-        self.set_cursor(spi, buffer_bounds.top_left).await?;
-        self.send(spi, Command::WriteOldRam, buffer.data()).await
+        command: Command,
+        data: &[u8],
+    ) -> Result<(), HW::Error> {
+        self.hw.send(spi, command.register(), data).await
+    }
+}
+
+impl <HW: EpdHw> Epd2In9<HW, StateReady> {
+    /// Sets the refresh mode.
+    pub async fn set_refresh_mode(
+        self,
+        spi: &mut HW::Spi,
+        mode: RefreshMode
+    ) -> Result<Self, HW::Error> {
+        if self.state.mode == mode {
+            Ok(self)
+        } else {
+            debug!("Changing refresh mode to {:?}", mode);
+            self.set_refresh_mode_impl(spi, mode).await
+        }
     }
 
     /// Sets the window to which the next image data will be written.
@@ -364,19 +401,9 @@ where
         self.send(spi, Command::SetRamY, &[y_low, y_high]).await?;
         Ok(())
     }
-
-    /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
-    pub async fn send(
-        &mut self,
-        spi: &mut HW::Spi,
-        command: Command,
-        data: &[u8],
-    ) -> Result<(), HW::Error> {
-        self.hw.send(spi, command.register(), data).await
-    }
 }
 
-impl <HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9<HW> {
+impl <HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9<HW, StateReady> {
     async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
         // Enable the clock and CP (?), and then display the data from the RAM. Note that there are
         // two RAM buffers, so this will swap the active buffer. Calling this function twice in a row
@@ -398,16 +425,13 @@ impl <HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9<HW> {
     }
 }
 
-impl <HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9<HW> {
+impl <HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9<HW, StateReady> {
     async fn display_framebuffer(&mut self, spi: &mut HW::Spi, buf: &dyn BufferView<1, 1>) -> Result<(), HW::Error> {
         self.write_framebuffer(spi, buf).await?;
 
         self.update_display(spi).await
     }
 
-    /// Writes raw image data, starting at the current cursor position and auto-incrementing x and
-    /// y within the current window. By default, x should increment first, then y (data is written
-    /// in rows).
     async fn write_framebuffer(&mut self, spi: &mut HW::Spi, buf: &dyn BufferView<1, 1>) -> Result<(), HW::Error> {
         let buffer_bounds = buf.window();
         self.set_window(spi, buffer_bounds).await?;
@@ -416,7 +440,7 @@ impl <HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9<HW> {
     }
 }
 
-impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9<HW> {
+impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9<HW, StateReady> {
     /// Writes buffer data into the old internal framebuffer. This can be useful either:
     ///
     /// * to prep the next frame before the current one has been displayed (since the old buffer
@@ -434,25 +458,50 @@ impl <HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9<HW> {
     }
 }
 
-impl <HW: EpdHw> Reset<HW::Error> for Epd2In9<HW> {
-    async fn reset(&mut self) -> Result<(), HW::Error> {
-        debug!("Resetting EPD");
-        // Assume reset is already high.
-        self.hw.reset().set_low()?;
-        self.hw.delay().delay_ms(10).await;
-        self.hw.reset().set_high()?;
-        self.hw.delay().delay_ms(10).await;
-        Ok(())
+async fn reset_impl<HW: EpdHw>(hw: &mut HW) -> Result<(), HW::Error> {
+    debug!("Resetting EPD");
+    // Assume reset is already high.
+    hw.reset().set_low()?;
+    hw.delay().delay_ms(10).await;
+    hw.reset().set_high()?;
+    hw.delay().delay_ms(10).await;
+    Ok(())
+}
+
+impl <HW: EpdHw, STATE: StateAwake> Reset<HW::Error> for Epd2In9<HW, STATE> {
+    type DisplayOut = Epd2In9<HW, STATE>;
+
+    async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
+        reset_impl(&mut self.hw).await?;
+        Ok(self)
     }
 }
 
-impl <HW: EpdHw> Sleep<HW::Spi, HW::Error> for Epd2In9<HW> {
-    async fn sleep(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Sleeping EPD");
-        self.send(spi, Command::DeepSleepMode, &[0x01]).await
-    }
+impl <HW: EpdHw, W: StateAwake> Reset<HW::Error> for Epd2In9<HW, StateAsleep<W>> {
+    type DisplayOut = Epd2In9<HW, W>;
 
-    async fn wake(&mut self, _spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+    async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
+        reset_impl(&mut self.hw).await?;
+        Ok(Epd2In9 { hw: self.hw, state: self.state.wake_state })
+    }
+}
+
+impl <HW: EpdHw, STATE: StateAwake> Sleep<HW::Spi, HW::Error> for Epd2In9<HW, STATE> {
+    type DisplayOut = Epd2In9<HW, StateAsleep<STATE>>;
+
+    async fn sleep(mut self, spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
+        debug!("Sleeping EPD");
+        self.send(spi, Command::DeepSleepMode, &[0x01]).await?;
+        Ok(
+            Epd2In9 { hw: self.hw, state: StateAsleep { wake_state: self.state } }
+        )
+    }
+}
+
+impl <HW: EpdHw, W: StateAwake> Wake<HW::Spi, HW::Error> for Epd2In9<HW, StateAsleep<W>> {
+    type DisplayOut = Epd2In9<HW, W>;
+
+    async fn wake(self, _spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
         debug!("Waking EPD");
         self.reset().await
 
