@@ -17,9 +17,11 @@ This is a Rust library providing async drivers for Waveshare's e-paper displays,
 The library uses a composable trait-based architecture split into hardware abstraction and functionality traits:
 
 ### Hardware Abstraction
+
 - `EpdHw`: Hardware abstraction for SPI communication, GPIO pins (Data/Command, Reset, Busy), and delay timers. Users must implement this trait for their hardware.
 
 ### Functionality Traits
+
 The functionality is split into composable traits for granular support and compile-time state checking:
 
 - `Reset`: Basic hardware reset support
@@ -33,7 +35,11 @@ The crate provides buffer utilities in the `buffer` module and display-specific 
 
 ## Common Development Commands
 
+Note that, where possible, any commands in the `samples/rp` directory need to specify the target as `thumbv6m-none-eabi`,
+and operate just on code for bins, as standard tests are not available on this target.
+
 ### Building and Testing
+
 ```bash
 # Build the main library
 cargo build
@@ -45,22 +51,24 @@ cargo test
 cargo build --release
 
 # Check without building
-cargo check
+cargo check && cargo check --package rp-samples --bins --target thumbv6m-none-eabi
 ```
 
 ### Code Quality
+
 ```bash
-# Format code (used by pre-commit hooks)
-cargo fmt
+# Format code in the workspace root
+cargo fmt && cargo fmt --package rp-samples
 
 # Run clippy linter
-cargo clippy
+cargo clippy && cargo clippy --package rp-samples --bins --target thumbv6m-none-eabi
 
 # Format all files with prettier (via husky)
 npx prettier --write --ignore-unknown .
 ```
 
 ### Sample Development (RP2040)
+
 ```bash
 # Navigate to samples directory
 cd samples/rp
@@ -76,7 +84,9 @@ rs-probe list
 ```
 
 ### Pre-commit Setup
+
 The project uses Husky for pre-commit hooks:
+
 ```bash
 # Install dependencies (if not done)
 npm ci
@@ -87,10 +97,12 @@ npm ci
 ## Dependencies and Features
 
 The library supports optional logging via:
+
 - `defmt` feature for embedded logging
 - `log` feature for standard Rust logging
 
 Key dependencies:
+
 - `embedded-hal-async` and `embedded-hal` for hardware abstraction
 - `embedded-graphics` for drawing operations
 - Embassy framework for async embedded development (dev dependencies)
@@ -102,6 +114,7 @@ Tests are run with standard `cargo test`. The samples act as integration tests a
 ## Display Support
 
 Currently supports:
+
 - 2.9" EPD v1 (`epd2in9` module)
 - 2.9" EPD v2 (`epd2in9_v2` module)
 
