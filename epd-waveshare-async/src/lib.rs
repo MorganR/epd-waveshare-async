@@ -33,7 +33,6 @@
 #![no_std]
 #![allow(async_fn_in_trait)]
 
-use embedded_graphics::prelude::DrawTarget;
 use embedded_hal_async::spi::SpiDevice;
 
 pub mod buffer;

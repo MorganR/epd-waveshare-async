@@ -1,4 +1,4 @@
-use core::{marker::PhantomData, time::Duration};
+use core::time::Duration;
 use embedded_graphics::{
     prelude::{Point, Size},
     primitives::Rectangle,
@@ -12,8 +12,8 @@ use embedded_hal_async::delay::DelayNs;
 use crate::{
     buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView},
     hw::CommandDataSend as _,
-    log::{debug, debug_assert, warn_log},
-    DisplayPartial, DisplaySimple, Displayable, EpdHw, Error, Reset, Sleep, Wake,
+    log::{debug, debug_assert},
+    DisplayPartial, DisplaySimple, Displayable, EpdHw, Reset, Sleep, Wake,
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -302,6 +302,7 @@ where
 }
 
 trait StateInternal {}
+#[allow(private_bounds)]
 pub trait State: StateInternal {}
 pub trait StateAwake: State {}
 
@@ -340,7 +341,7 @@ where
 {
     pub fn new(hw: HW) -> Self {
         Epd2In9V2 {
-            hw: hw,
+            hw,
             state: StateUninitialized(),
         }
     }
@@ -419,7 +420,7 @@ where
 
         Ok(Epd2In9V2 {
             hw: self.hw,
-            state: StateReady { mode: mode },
+            state: StateReady { mode },
         })
     }
 }

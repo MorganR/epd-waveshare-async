@@ -202,6 +202,7 @@ where
 }
 
 trait StateInternal {}
+#[allow(private_bounds)]
 pub trait State: StateInternal {}
 pub trait StateAwake: State {}
 
@@ -240,7 +241,7 @@ where
 {
     pub fn new(hw: HW) -> Self {
         Epd2In9 {
-            hw: hw,
+            hw,
             state: StateUninitialized(),
         }
     }
@@ -332,7 +333,7 @@ where
 
         Ok(Epd2In9 {
             hw: self.hw,
-            state: StateReady { mode: mode },
+            state: StateReady { mode },
         })
     }
 
