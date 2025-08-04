@@ -18,7 +18,6 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle};
 use epd_waveshare_async::epd2in9::{self};
-use epd_waveshare_async::epd2in9_v2::Command;
 use epd_waveshare_async::{
     epd2in9_v2::{Epd2In9V2, RefreshMode},
     *,
@@ -57,10 +56,10 @@ async fn main(_spawner: Spawner) {
     // CS is active low.
     let cs_pin = Output::new(resources.spi_hw.cs, Level::High);
     let mut spi = SpiDevice::new(&raw_spi, cs_pin);
-    let mut epd = Epd2In9V2::new(DisplayHw::new(resources.epd_hw));
+    let epd = Epd2In9V2::new(DisplayHw::new(resources.epd_hw));
 
     info!("Initializing EPD");
-    expect!(
+    let mut epd = expect!(
         epd.init(&mut spi, RefreshMode::Full).await,
         "Failed to initialize EPD"
     );
@@ -96,7 +95,7 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(4).await;
 
     info!("Changing to partial refresh mode");
-    expect!(
+    epd = expect!(
         epd.set_refresh_mode(&mut spi, RefreshMode::Partial).await,
         "Failed to set refresh mode"
     );
@@ -150,11 +149,11 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(2).await;
 
     info!("Sleeping EPD");
-    expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
+    let epd = expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     Timer::after_secs(2).await;
 
     info!("Waking EPD");
-    expect!(epd.wake(&mut spi).await, "Failed to wake EPD");
+    let mut epd = expect!(epd.wake(&mut spi).await, "Failed to wake EPD");
     Timer::after_secs(1).await;
 
     info!("Displaying text");
@@ -171,7 +170,8 @@ async fn main(_spawner: Spawner) {
     );
     Timer::after_secs(4).await;
 
-    epd.set_refresh_mode(&mut spi, RefreshMode::Full)
+    epd = epd
+        .set_refresh_mode(&mut spi, RefreshMode::Full)
         .await
         .unwrap();
     buffer.clear(BinaryColor::On).unwrap();
@@ -180,6 +180,6 @@ async fn main(_spawner: Spawner) {
         "Failed to clear display"
     );
 
-    expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
+    let _epd = expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     info!("Done");
 }

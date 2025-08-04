@@ -56,10 +56,10 @@ async fn main(_spawner: Spawner) {
     // CS is active low.
     let cs_pin = Output::new(resources.spi_hw.cs, Level::High);
     let mut spi = SpiDevice::new(&raw_spi, cs_pin);
-    let mut epd = Epd2In9::new(DisplayHw::new(resources.epd_hw));
+    let epd = Epd2In9::new(DisplayHw::new(resources.epd_hw));
 
     info!("Initializing EPD");
-    expect!(
+    let mut epd = expect!(
         epd.init(&mut spi, RefreshMode::Full).await,
         "Failed to initialize EPD"
     );
@@ -76,7 +76,7 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(4).await;
 
     info!("Changing to partial refresh mode");
-    expect!(
+    epd = expect!(
         epd.set_refresh_mode(&mut spi, RefreshMode::Partial).await,
         "Failed to set refresh mode"
     );
@@ -143,7 +143,8 @@ async fn main(_spawner: Spawner) {
         style,
     );
     text.draw(&mut buffer).unwrap();
-    epd.set_refresh_mode(&mut spi, RefreshMode::PartialBlackBypass)
+    epd = epd
+        .set_refresh_mode(&mut spi, RefreshMode::PartialBlackBypass)
         .await
         .unwrap();
     expect!(
@@ -162,7 +163,8 @@ async fn main(_spawner: Spawner) {
     // Cover the right-side of the text.
     buffer.fill_solid(&right_half, BinaryColor::Off).unwrap();
     // Just display white pixels (i.e. same as before plus left side of text).
-    epd.set_refresh_mode(&mut spi, RefreshMode::PartialWhiteBypass)
+    epd = epd
+        .set_refresh_mode(&mut spi, RefreshMode::PartialWhiteBypass)
         .await
         .unwrap();
     expect!(
@@ -171,22 +173,22 @@ async fn main(_spawner: Spawner) {
     );
 
     info!("Sleeping EPD");
-    expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
+    let epd = expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     Timer::after_secs(2).await;
 
     info!("Waking EPD");
-    expect!(epd.wake(&mut spi).await, "Failed to wake EPD");
+    let mut epd = expect!(epd.wake(&mut spi).await, "Failed to wake EPD");
     Timer::after_secs(1).await;
 
     // Prepare for border updates. These require full refresh mode.
-    expect!(
+    epd = expect!(
         epd.set_refresh_mode(&mut spi, RefreshMode::Full).await,
         "Failed to set refresh mode"
     );
 
     // Clear both framebuffers to make the border more obvious.
     buffer.clear(BinaryColor::On).unwrap();
-    epd.write_old_framebuffer(&mut spi, &buffer).await.unwrap();
+    epd.write_base_framebuffer(&mut spi, &buffer).await.unwrap();
     epd.write_framebuffer(&mut spi, &buffer).await.unwrap();
     info!("Setting white border");
     expect!(
@@ -210,6 +212,6 @@ async fn main(_spawner: Spawner) {
     );
     Timer::after_secs(3).await;
 
-    expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
+    let _epd = expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     info!("Done");
 }
