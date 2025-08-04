@@ -4,26 +4,31 @@
 //! wide range of embedded platforms.
 //!
 //! ## Core traits
+//! 
+//! ### Hardware
 //!
-//! The crate is organized around two main traits:
-//!
-//! - [`Epd`]: This trait defines the core functionality for interacting with an E-Paper display,
-//!   such as initialization, refreshing, writing image data, and managing sleep states.
-//!   Implementations of this trait (e.g., [`epd2in9::Epd2In9`]) provide concrete display-specific
-//!   logic. Concrete implementations may also provide further functionality that doesn't fit in
-//!   the general `Epd` trait (e.g. modifying the border on the Epd2In9 screen).
-//!
-//! - [`EpdHw`]: This trait abstracts over the underlying hardware components required to control an
-//!   E-Paper display, including SPI communication, GPIO pins (for Data/Command, Reset, and Busy
-//!   signals), and a delay timer. You need to implement this trait for your chosen peripherals.
-//!   This trades off some set up code (implementing this trait), for simple type signatures with
-//!   only one generic parameter.
+//! The use must implement the [`EpdHw`] trait for their hardware. This trait abstracts over the
+//! underlying hardware components required to control an E-Paper display, including SPI
+//! communication, GPIO pins (for Data/Command, Reset, and Busy and a delay timer. You need to
+//! implement this trait for your chosen peripherals. This trades off some set up code (implementing
+//! this trait), for simple type signatures with fewer generic parameters.
+//! 
+//! ### Functionality
+//! 
+//! Functionality is split into composable traits, to enable granular support per display, and
+//! stateful functionality that can be checked at compilation time.
+//! 
+//! * [Reset]: basic hardware reset support
+//! * [Sleep]: displays that can be put to sleep
+//! * [Wake]: displays that can be woken from sleep
+//! * [DisplaySimple]: basic support for writing and displaying a single framebuffer
+//! * [DisplayPartial]: support for partial refresh using a diff
 //!
 //! Additionally, the crate provides:
 //!
-//! - `buffer` module: Contains utilities for creating and managing efficient display buffers that
+//! - [`buffer`] module: Contains utilities for creating and managing efficient display buffers that
 //!   implement `embedded-graphics::DrawTarget`. These are designed to be fast and compact.
-//! - `<display>` modules: each display lives in its own module, such as `epd2in9` for the 2.9"
+//! - various `<display>` modules: each display lives in its own module, such as `epd2in9` for the 2.9"
 //!   e-paper display.
 #![no_std]
 #![allow(async_fn_in_trait)]
@@ -110,7 +115,7 @@ pub trait DisplaySimple<const BITS: usize, const FRAMES: usize, SPI: SpiDevice, 
 
 /// Displays that support a partial update, where a "diff" framebuffer is diffed against a base
 /// framebuffer, and only the changed pixels from the diff are actually updated.
-pub trait DisplayPartial<const BITS: usize, const FRAMES: usize, SPI: SpiDevice, ERROR>: Displayable<SPI, ERROR> {
+pub trait DisplayPartial<const BITS: usize, const FRAMES: usize, SPI: SpiDevice, ERROR>: DisplaySimple<BITS, FRAMES, SPI, ERROR> {
     /// Writes the buffer to the base framebuffer that the main framebuffer layer (written with
     /// [DisplaySimple::write_framebuffer]) will be diffed against.
     /// Only pixels that differ will be updated.
