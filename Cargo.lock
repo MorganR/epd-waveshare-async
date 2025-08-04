@@ -590,6 +590,7 @@ dependencies = [
 name = "epd-waveshare-async"
 version = "0.1.3-alpha"
 dependencies = [
+ "bitflags 2.9.1",
  "defmt 1.0.1",
  "embassy-embedded-hal",
  "embassy-rp",

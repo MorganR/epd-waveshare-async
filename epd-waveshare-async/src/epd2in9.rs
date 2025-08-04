@@ -385,6 +385,15 @@ where
         self.update_display(spi).await
     }
 
+    async fn display_partial_buffer(
+        &mut self,
+        _spi: &mut HW::Spi,
+        _buffer: &Self::Buffer,
+        _area: Rectangle,
+    ) -> Result<(), HW::Error> {
+        unimplemented!("This hardware supports a different API for partial updates");
+    }
+
     async fn write_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
