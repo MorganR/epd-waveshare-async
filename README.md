@@ -8,7 +8,7 @@ This is inspired by both the existing (sync) [epd-waveshare](https://github.com/
 
 ## Drivers
 
-To start, this library only supports the v1 2.9" EPD. Drivers should all be tested on real
+To start, this library only supports the v1 2.9" and v2 7.5" EPD. Drivers should all be tested on real
 displays using a sample program (see below). Each driver should go in its own module.
 
 ## Samples

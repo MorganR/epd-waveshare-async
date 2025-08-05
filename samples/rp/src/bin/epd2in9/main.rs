@@ -3,6 +3,8 @@
 #![no_std]
 #![no_main]
 
+mod hw;
+
 use defmt::{expect, info};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
@@ -22,7 +24,7 @@ use epd_waveshare_async::{
     epd2in9::{Epd2In9, RefreshMode},
     Epd,
 };
-use rp_samples::*;
+use hw::*;
 use {defmt_rtt as _, panic_probe as _};
 
 #[embassy_executor::main]
@@ -46,13 +48,11 @@ async fn main(_spawner: Spawner) {
         embedded_hal_async::spi::Polarity::IdleLow => embassy_rp::spi::Polarity::IdleLow,
     };
 
-    let raw_spi: Mutex<NoopRawMutex, _> = Mutex::new(Spi::new(
+    let raw_spi: Mutex<NoopRawMutex, _> = Mutex::new(Spi::new_txonly(
         resources.spi_hw.spi,
         resources.spi_hw.clk,
         resources.spi_hw.tx,
-        resources.spi_hw.rx,
         resources.spi_hw.dma_tx,
-        resources.spi_hw.dma_rx,
         config,
     ));
     // CS is active low.

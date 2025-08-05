@@ -9,6 +9,7 @@ license.workspace = true
 readme.workspace = true
 
 [dependencies]
+bitflags = { version = "2.9.1" }
 defmt = { workspace = true, optional = true }
 embedded-graphics.workspace = true
 embedded-hal.workspace = true

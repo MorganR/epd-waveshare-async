@@ -42,7 +42,7 @@ use embedded_hal_async::{
 
 pub mod buffer;
 pub mod epd2in9;
-
+pub mod epd7in5_v2;
 mod log;
 
 #[allow(async_fn_in_trait)]
@@ -84,6 +84,14 @@ where
         &mut self,
         spi: &mut HW::Spi,
         buffer: &Self::Buffer,
+    ) -> Result<(), HW::Error>;
+
+    /// Writes the buffer's data to the display, for the range that covers area. Then performs partial refresh.
+    async fn display_partial_buffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buffer: &Self::Buffer,
+        area: Rectangle,
     ) -> Result<(), HW::Error>;
 
     /// Writes the buffer's data to the display's internal framebuffer, but does not display it.
