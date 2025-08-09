@@ -69,8 +69,6 @@ pub enum RefreshMode {
     ///
     /// This is the standard "fast" update. It diffs the current framebuffer against the
     /// previous framebuffer, and just updates the pixels that differ.
-    ///
-    /// TODO: This doesn't work yet.
     Partial,
 }
 
@@ -347,6 +345,15 @@ where
     }
 }
 
+pub enum Bypass {
+    /// Remove any RAM bypass setting.
+    Normal = 0,
+    /// Reads all zeros as the base for the partial diff.
+    BypassAllZero = 0b100,
+    /// Reads the base of the partial diff as if it's inverted.
+    BypassInverted = 0b1000,
+}
+
 impl<HW, STATE> Epd2In9V2<HW, STATE>
 where
     HW: EpdHw,
@@ -442,6 +449,20 @@ impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
         self.state.mode = mode;
 
         Ok(())
+    }
+
+    pub async fn set_bypass(
+        &mut self,
+        spi: &mut HW::Spi,
+        low_bypass: Bypass,
+        high_bypass: Bypass,
+    ) -> Result<(), HW::Error> {
+        self.send(
+            spi,
+            Command::DisplayUpdateControl1,
+            &[((high_bypass as u8) << 4) | (low_bypass as u8), 0x80],
+        )
+        .await
     }
 
     /// Sets the window to which the next image data will be written.

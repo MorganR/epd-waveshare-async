@@ -17,7 +17,7 @@ use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle};
-use epd_waveshare_async::epd2in9::{self};
+use epd_waveshare_async::epd2in9_v2::Bypass;
 use epd_waveshare_async::{
     epd2in9_v2::{Epd2In9V2, RefreshMode},
     *,
@@ -69,9 +69,6 @@ async fn main(_spawner: Spawner) {
         .fill_solid(&buffer.bounding_box(), BinaryColor::On)
         .unwrap();
     info!("Displaying white buffer");
-    // TODO: try properly setting this after low ram, but before turning on the display
-    // epd.send(&mut spi, Command::WriteHighRam, buffer.data()).await.unwrap();
-    // I suspect I need to set both "low" and "high" buffers before doing a partial update.
     expect!(
         epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display buffer"
@@ -82,11 +79,16 @@ async fn main(_spawner: Spawner) {
     epd.write_base_framebuffer(&mut spi, &buffer).await.unwrap();
 
     info!("Displaying text");
-    let mut style = TextStyle::default();
-    style.alignment = Alignment::Left;
-    style.baseline = Baseline::Top;
+    let mut text_style = TextStyle::default();
+    text_style.alignment = Alignment::Left;
+    text_style.baseline = Baseline::Top;
     let character_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::Off);
-    let text = Text::with_text_style("Hello, EPD!", Point::new(10, 10), character_style, style);
+    let text = Text::with_text_style(
+        "Hello, EPD!",
+        Point::new(10, 10),
+        character_style,
+        text_style.clone(),
+    );
     text.draw(&mut buffer).unwrap();
     expect!(
         epd.display_framebuffer(&mut spi, &buffer).await,
@@ -137,15 +139,29 @@ async fn main(_spawner: Spawner) {
     );
     Timer::after_secs(4).await;
 
-    // This works differently from V1: it displays the same image in RefreshMode::Full,
-    // or toggles back to the "base" image in RefreshMode::Partial.
-    info!("Re-displaying as a test");
-    expect!(epd.update_display(&mut spi).await, "Failed to re-display");
+    buffer.clear(BinaryColor::On).unwrap();
+    let character_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::Off);
+    let text = Text::with_text_style(
+        "Black text",
+        Point::new(10, 30),
+        character_style,
+        text_style.clone(),
+    );
+    text.draw(&mut buffer).unwrap();
+    epd.display_framebuffer(&mut spi, &buffer).await.unwrap();
     Timer::after_secs(2).await;
 
-    // In partial, this toggles back to the check buffer.
-    info!("Re-displaying as a test");
-    expect!(epd.update_display(&mut spi).await, "Failed to re-display");
+    info!("Displaying with inverse");
+    // This re-displays the check pattern, which has been swapped back to the main buffer, but now it shows it inverted.
+    expect!(
+        epd.set_bypass(&mut spi, Bypass::BypassInverted, Bypass::Normal)
+            .await,
+        "Failed to set bypass"
+    );
+    expect!(
+        epd.update_display(&mut spi).await,
+        "Failed to display inverted check"
+    );
     Timer::after_secs(2).await;
 
     info!("Sleeping EPD");
@@ -157,23 +173,71 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(1).await;
 
     info!("Displaying text");
+    // Read the base as inverted to get a proper diff, since we displayed it inverted last time when it was the main framebuffer.
+    expect!(
+        epd.set_bypass(&mut spi, Bypass::Normal, Bypass::BypassInverted)
+            .await,
+        "Failed to reset bypass"
+    );
     buffer.clear(BinaryColor::On).unwrap();
-    let mut style = TextStyle::default();
-    style.alignment = Alignment::Left;
-    style.baseline = Baseline::Top;
     let character_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::Off);
-    let text = Text::with_text_style("I'm awake!", Point::new(10, 30), character_style, style);
+    let text = Text::with_text_style(
+        "I'm awake!",
+        Point::new(10, 30),
+        character_style,
+        text_style.clone(),
+    );
     text.draw(&mut buffer).unwrap();
     expect!(
         epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display text buffer"
     );
-    Timer::after_secs(4).await;
+    // Reset the bypasses now the base is normal again.
+    expect!(
+        epd.set_bypass(&mut spi, Bypass::Normal, Bypass::Normal)
+            .await,
+        "Failed to reset bypass"
+    );
+    Timer::after_secs(3).await;
 
+    info!("Displaying black");
+    epd.set_bypass(&mut spi, Bypass::BypassAllZero, Bypass::Normal)
+        .await
+        .unwrap();
+    epd.update_display(&mut spi).await.unwrap();
+    Timer::after_secs(3).await;
+
+    info!("Displaying white text on black");
+    buffer.clear(BinaryColor::Off).unwrap();
+    let character_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+    let text = Text::with_text_style(
+        "White text",
+        Point::new(10, 60),
+        character_style,
+        text_style.clone(),
+    );
+    text.draw(&mut buffer).unwrap();
+    // Read the base as all black when doing the diff.
+    expect!(
+        epd.set_bypass(&mut spi, Bypass::Normal, Bypass::BypassAllZero)
+            .await,
+        "Failed to reset bypass"
+    );
+    epd.display_framebuffer(&mut spi, &buffer).await.unwrap();
+    Timer::after_secs(2).await;
+    // Reset the bypasses now the base is normal again.
+    expect!(
+        epd.set_bypass(&mut spi, Bypass::Normal, Bypass::Normal)
+            .await,
+        "Failed to reset bypass"
+    );
+
+    info!("Final clear");
     epd.set_refresh_mode(&mut spi, RefreshMode::Full)
         .await
         .unwrap();
     buffer.clear(BinaryColor::On).unwrap();
+    epd.write_base_framebuffer(&mut spi, &buffer).await.unwrap();
     expect!(
         epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to clear display"
