@@ -7,7 +7,9 @@ use defmt::{expect, info};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{Level, Output};
+use embassy_rp::peripherals;
 use embassy_rp::spi::{self, Spi};
+use embassy_rp::Peri;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Instant, Timer};
@@ -24,6 +26,22 @@ use epd_waveshare_async::{
 };
 use rp_samples::*;
 use {defmt_rtt as _, panic_probe as _};
+
+// Define the resources needed to communicate with the display.
+assign_resources::assign_resources! {
+    spi_hw: SpiP {
+        spi: SPI1,
+        clk: PIN_10,
+        tx: PIN_11,
+        dma_tx: DMA_CH1,
+        cs: PIN_9,
+    },
+    epd_hw: DisplayP {
+        reset: PIN_12,
+        dc: PIN_8,
+        busy: PIN_13,
+    },
+}
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -56,7 +74,11 @@ async fn main(_spawner: Spawner) {
     // CS is active low.
     let cs_pin = Output::new(resources.spi_hw.cs, Level::High);
     let mut spi = SpiDevice::new(&raw_spi, cs_pin);
-    let epd = Epd2In9V2::new(DisplayHw::new(resources.epd_hw));
+    let epd = Epd2In9V2::new(DisplayHw::new(
+        resources.epd_hw.dc,
+        resources.epd_hw.reset,
+        resources.epd_hw.busy,
+    ));
 
     info!("Initializing EPD");
     let mut epd = expect!(
