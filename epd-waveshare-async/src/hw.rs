@@ -31,6 +31,7 @@ use crate::log::trace;
 /// enum Error {
 ///   #[error("SPI error: {0:?}")]
 ///   SpiError(SpiDeviceError<spi::Error, Infallible>),
+///   #[error("Display error: {0:?}")]
 ///   DisplayError(EpdError),
 /// }
 ///
