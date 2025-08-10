@@ -255,6 +255,7 @@ async fn main(_spawner: Spawner) {
     );
 
     let mut gray_buffer = new_gray2_buffer();
+    gray_buffer.clear(Gray2::new(0b00)).unwrap();
     let square_size = Size::new(
         epd2in9_v2::DISPLAY_WIDTH as u32 / 2,
         epd2in9_v2::DISPLAY_WIDTH as u32 / 2,
@@ -268,6 +269,7 @@ async fn main(_spawner: Spawner) {
         start += square_step;
     }
 
+    info!("Displaying 4-colour grayscale");
     expect!(
         epd.set_refresh_mode(&mut spi, RefreshMode::Gray2).await,
         "Failed to set Gray2 refresh mode"
@@ -276,7 +278,17 @@ async fn main(_spawner: Spawner) {
         epd.display_framebuffer(&mut spi, &gray_buffer).await,
         "Failed to draw Gray2 buffer"
     );
-    Timer::after_secs(4).await;
+    Timer::after_secs(5).await;
+
+    info!("Inverting grayscale image");
+    epd.set_bypass(&mut spi, Bypass::BypassInverted, Bypass::BypassInverted)
+        .await
+        .unwrap();
+    epd.update_display(&mut spi).await.unwrap();
+    Timer::after_secs(5).await;
+    epd.set_bypass(&mut spi, Bypass::Normal, Bypass::Normal)
+        .await
+        .unwrap();
 
     info!("Final clear");
     epd.set_refresh_mode(&mut spi, RefreshMode::Full)

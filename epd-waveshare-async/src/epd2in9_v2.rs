@@ -399,19 +399,11 @@ where
         debug!("Initialising display");
         self = self.reset().await?;
 
-        // Reset all configurations to default.
-        self.send(spi, Command::SwReset, &[]).await?;
-
-        self.send(spi, Command::DriverOutputControl, &DRIVER_OUTPUT_INIT_DATA)
-            .await?;
-        // Auto-increment X and Y, moving in the X direction first.
-        self.send(spi, Command::DataEntryModeSetting, &[0b11])
-            .await?;
-
         let mut epd = Epd2In9V2 {
             hw: self.hw,
             state: StateReady { mode },
         };
+
         epd.set_refresh_mode_impl(spi, mode).await?;
         Ok(epd)
     }
@@ -448,6 +440,15 @@ impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
         spi: &mut <HW as EpdHw>::Spi,
         mode: RefreshMode,
     ) -> Result<(), <HW as EpdHw>::Error> {
+        // Reset all configurations to default.
+        self.send(spi, Command::SwReset, &[]).await?;
+
+        self.send(spi, Command::DriverOutputControl, &DRIVER_OUTPUT_INIT_DATA)
+            .await?;
+        // Auto-increment X and Y, moving in the X direction first.
+        self.send(spi, Command::DataEntryModeSetting, &[0b11])
+            .await?;
+
         match mode {
             RefreshMode::Gray2 => self.send(spi, Command::DisplayUpdateControl1, &[0x00, 0x00]),
             // Black and white mode.
@@ -509,10 +510,17 @@ impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
         spi: &mut HW::Spi,
         shape: Rectangle,
     ) -> Result<(), <HW as EpdHw>::Error> {
+        let (x_start, x_end) = if self.state.mode == RefreshMode::Gray2 {
+            // When using gray2, for some reason the position is misaligned. This fixes it.
+            let x_start = shape.top_left.x + 8;
+            let x_end = shape.top_left.x + shape.size.width as i32 + 7;
+            (x_start, x_end)
+        } else {
+            let x_start = shape.top_left.x;
+            (x_start, x_start + shape.size.width as i32 - 1)
+        };
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
-        let x_start = shape.top_left.x;
-        let x_end = x_start + shape.size.width as i32 - 1;
         debug_assert!(
             x_start % 8 == 0 && x_end % 8 == 7,
             "window's top_left.x and width must be 8-bit aligned"
@@ -547,8 +555,13 @@ impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
         debug_assert_eq!(position.x % 8, 0, "position.x must be 8-bit aligned");
+        let x_pos = if self.state.mode == RefreshMode::Gray2 {
+            position.x + 8
+        } else {
+            position.x
+        };
 
-        self.send(spi, Command::SetRamX, &[(position.x >> 3) as u8])
+        self.send(spi, Command::SetRamX, &[(x_pos >> 3) as u8])
             .await?;
         let (y_low, y_high) = split_low_and_high(position.y as u16);
         self.send(spi, Command::SetRamY, &[y_low, y_high]).await?;
