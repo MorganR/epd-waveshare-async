@@ -15,11 +15,11 @@ use embassy_sync::mutex::Mutex;
 use embassy_time::{Instant, Timer};
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::pixelcolor::BinaryColor;
+use embedded_graphics::pixelcolor::{BinaryColor, Gray2};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle};
-use epd_waveshare_async::epd2in9_v2::Bypass;
+use epd_waveshare_async::epd2in9_v2::{new_gray2_buffer, Bypass};
 use epd_waveshare_async::{
     epd2in9_v2::{Epd2In9V2, RefreshMode},
     *,
@@ -253,6 +253,30 @@ async fn main(_spawner: Spawner) {
             .await,
         "Failed to reset bypass"
     );
+
+    let mut gray_buffer = new_gray2_buffer();
+    let square_size = Size::new(
+        epd2in9_v2::DISPLAY_WIDTH as u32 / 2,
+        epd2in9_v2::DISPLAY_WIDTH as u32 / 2,
+    );
+    let square_step = Size::new(square_size.width / 2, square_size.height);
+    let mut start = Point::new(-(square_size.width as i32) / 2, 0);
+    for luma in 0..4 {
+        gray_buffer
+            .fill_solid(&Rectangle::new(start, square_size), Gray2::new(luma))
+            .unwrap();
+        start += square_step;
+    }
+
+    expect!(
+        epd.set_refresh_mode(&mut spi, RefreshMode::Gray2).await,
+        "Failed to set Gray2 refresh mode"
+    );
+    expect!(
+        epd.display_framebuffer(&mut spi, &gray_buffer).await,
+        "Failed to draw Gray2 buffer"
+    );
+    Timer::after_secs(4).await;
 
     info!("Final clear");
     epd.set_refresh_mode(&mut spi, RefreshMode::Full)

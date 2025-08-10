@@ -10,7 +10,9 @@ use embedded_hal::{
 use embedded_hal_async::delay::DelayNs;
 
 use crate::{
-    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView},
+    buffer::{
+        binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView, Gray2SplitBuffer,
+    },
     hw::CommandDataSend as _,
     log::{debug, debug_assert},
     DisplayPartial, DisplaySimple, Displayable, EpdHw, Reset, Sleep, Wake,
@@ -54,6 +56,22 @@ const LUT_MAGIC_PARTIAL_UPDATE: [u8; 1] = [0x22];
 const GATE_VOLTAGE_PARTIAL_UPDATE: [u8; 1] = [0x17];
 const SOURCE_VOLTAGE_PARTIAL_UPDATE: [u8; 3] = [0x41, 0xB0, 0x32];
 const VCOM_PARTIAL_UPDATE: [u8; 1] = [0x36];
+const LUT_GRAY2: [u8; 153] = [
+    0x00, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x60, 0x10, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x28, 0x60, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x2A, 0x60, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x05,
+    0x14, 0x00, 0x00, 0x1E, 0x1E, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x05, 0x14, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x24, 0x22, 0x22, 0x22, 0x23, 0x32, 0x00, 0x00, 0x00,
+];
+const LUT_MAGIC_GRAY2: [u8; 1] = [0x22];
+const GATE_VOLTAGE_GRAY2: [u8; 1] = [0x17];
+const SOURCE_VOLTAGE_GRAY2: [u8; 3] = [0x41, 0xAE, 0x32];
+const VCOM_GRAY2: [u8; 1] = [0x28];
 
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +88,11 @@ pub enum RefreshMode {
     /// This is the standard "fast" update. It diffs the current framebuffer against the
     /// previous framebuffer, and just updates the pixels that differ.
     Partial,
+    /// A refresh mode that supports 2-bit grayscale. Note that Waveshare calls this "Gray4", but
+    /// we use `Gray2` to align with the embedded-graphics color [embedded_graphics::pixelcolor::Gray2].
+    ///
+    /// There is no partial update version for Gray2. All updates require writing to both on-device framebuffers.
+    Gray2,
 }
 
 impl RefreshMode {
@@ -78,7 +101,7 @@ impl RefreshMode {
         match self {
             RefreshMode::Full => &[0x05],
             RefreshMode::Partial => &[0x80],
-            // Grey: 0x04
+            RefreshMode::Gray2 => &[0x04],
         }
     }
 
@@ -86,7 +109,8 @@ impl RefreshMode {
     pub fn lut(&self) -> &[u8] {
         match self {
             RefreshMode::Full => &LUT_FULL_UPDATE,
-            _ => &LUT_PARTIAL_UPDATE,
+            RefreshMode::Partial => &LUT_PARTIAL_UPDATE,
+            RefreshMode::Gray2 => &LUT_GRAY2,
         }
     }
 
@@ -94,6 +118,7 @@ impl RefreshMode {
         match self {
             RefreshMode::Full => &LUT_MAGIC_FULL_UPDATE,
             RefreshMode::Partial => &LUT_MAGIC_PARTIAL_UPDATE,
+            RefreshMode::Gray2 => &LUT_MAGIC_GRAY2,
         }
     }
 
@@ -101,6 +126,7 @@ impl RefreshMode {
         match self {
             RefreshMode::Full => &GATE_VOLTAGE_FULL_UPDATE,
             RefreshMode::Partial => &GATE_VOLTAGE_PARTIAL_UPDATE,
+            RefreshMode::Gray2 => &GATE_VOLTAGE_GRAY2,
         }
     }
 
@@ -108,6 +134,7 @@ impl RefreshMode {
         match self {
             RefreshMode::Full => &SOURCE_VOLTAGE_FULL_UPDATE,
             RefreshMode::Partial => &SOURCE_VOLTAGE_PARTIAL_UPDATE,
+            RefreshMode::Gray2 => &SOURCE_VOLTAGE_GRAY2,
         }
     }
 
@@ -115,6 +142,7 @@ impl RefreshMode {
         match self {
             RefreshMode::Full => &VCOM_FULL_UPDATE,
             RefreshMode::Partial => &VCOM_PARTIAL_UPDATE,
+            RefreshMode::Gray2 => &VCOM_GRAY2,
         }
     }
 
@@ -272,6 +300,10 @@ pub type Epd2In9BinaryBuffer = BinaryBuffer<BINARY_BUFFER_LENGTH>;
 pub fn new_binary_buffer() -> Epd2In9BinaryBuffer {
     Epd2In9BinaryBuffer::new(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32))
 }
+pub type Epd2In9Gray2Buffer = Gray2SplitBuffer<BINARY_BUFFER_LENGTH>;
+pub fn new_gray2_buffer() -> Epd2In9Gray2Buffer {
+    Epd2In9Gray2Buffer::new(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32))
+}
 
 /// This should be sent with [Command::DriverOutputControl] during initialisation.
 ///
@@ -376,10 +408,6 @@ where
         self.send(spi, Command::DataEntryModeSetting, &[0b11])
             .await?;
 
-        // Set to black and white mode.
-        self.send(spi, Command::DisplayUpdateControl1, &[0x00, 0x80])
-            .await?;
-
         let mut epd = Epd2In9V2 {
             hw: self.hw,
             state: StateReady { mode },
@@ -420,6 +448,13 @@ impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
         spi: &mut <HW as EpdHw>::Spi,
         mode: RefreshMode,
     ) -> Result<(), <HW as EpdHw>::Error> {
+        match mode {
+            RefreshMode::Gray2 => self.send(spi, Command::DisplayUpdateControl1, &[0x00, 0x00]),
+            // Black and white mode.
+            _ => self.send(spi, Command::DisplayUpdateControl1, &[0x00, 0x80]),
+        }
+        .await?;
+
         self.send(spi, Command::SetBorderWaveform, mode.border_waveform())
             .await?;
 
@@ -609,6 +644,30 @@ impl<HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, StateR
         self.set_window(spi, buffer_bounds).await?;
         self.set_cursor(spi, buffer_bounds.top_left).await?;
         self.send(spi, Command::WriteLowRam, buf.data()[0]).await
+    }
+}
+
+impl<HW: EpdHw> DisplaySimple<1, 2, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
+    async fn display_framebuffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buf: &dyn BufferView<1, 2>,
+    ) -> Result<(), HW::Error> {
+        self.write_framebuffer(spi, buf).await?;
+
+        self.update_display(spi).await
+    }
+
+    async fn write_framebuffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buf: &dyn BufferView<1, 2>,
+    ) -> Result<(), HW::Error> {
+        let buffer_bounds = buf.window();
+        self.set_window(spi, buffer_bounds).await?;
+        self.set_cursor(spi, buffer_bounds.top_left).await?;
+        self.send(spi, Command::WriteLowRam, buf.data()[0]).await?;
+        self.send(spi, Command::WriteHighRam, buf.data()[1]).await
     }
 }
 
