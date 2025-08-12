@@ -254,6 +254,7 @@ async fn main(_spawner: Spawner) {
         "Failed to reset bypass"
     );
 
+    info!("Display 4-color grayscale");
     let mut gray_buffer = new_gray2_buffer();
     let square_size = Size::new(
         epd2in9_v2::DISPLAY_WIDTH as u32 / 2,
@@ -276,7 +277,19 @@ async fn main(_spawner: Spawner) {
         epd.display_framebuffer(&mut spi, &gray_buffer).await,
         "Failed to draw Gray2 buffer"
     );
-    Timer::after_secs(4).await;
+    Timer::after_secs(5).await;
+
+    info!("Inverting 4-color grayscale");
+    expect!(
+        epd.set_ram_bypass(&mut spi, Bypass::Inverted, Bypass::Inverted)
+            .await,
+        "Failed to invert Gray2"
+    );
+    epd.update_display(&mut spi).await.unwrap();
+    Timer::after_secs(5).await;
+    epd.set_ram_bypass(&mut spi, Bypass::Normal, Bypass::Normal)
+        .await
+        .unwrap();
 
     info!("Final clear");
     epd.set_refresh_mode(&mut spi, RefreshMode::Full)

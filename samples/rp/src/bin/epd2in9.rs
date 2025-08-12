@@ -30,16 +30,16 @@ use {defmt_rtt as _, panic_probe as _};
 // Define the resources needed to communicate with the display.
 assign_resources::assign_resources! {
     spi_hw: SpiP {
-        spi: SPI1,
-        clk: PIN_10,
-        tx: PIN_11,
+        spi: SPI0,
+        clk: PIN_2,
+        tx: PIN_3,
         dma_tx: DMA_CH1,
-        cs: PIN_9,
+        cs: PIN_5,
     },
     epd_hw: DisplayP {
-        reset: PIN_12,
-        dc: PIN_8,
-        busy: PIN_13,
+        reset: PIN_7,
+        dc: PIN_6,
+        busy: PIN_8,
     },
 }
 

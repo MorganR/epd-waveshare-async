@@ -186,21 +186,6 @@ const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xD7, 0xD6, 0x9D];
 // Datasheet:
 // const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xCF, 0xCE, 0x8D];
 
-/// Controls v1 of the 2.9" Waveshare e-paper display.
-///
-/// * [datasheet](https://files.waveshare.com/upload/e/e6/2.9inch_e-Paper_Datasheet.pdf)
-/// * [sample code](https://github.com/waveshareteam/e-Paper/blob/master/RaspberryPi_JetsonNano/python/lib/waveshare_epd/epd2in9.py)
-///
-/// The display has a portrait orientation. This uses [BinaryColor], where `Off` is black and `On` is white.
-pub struct Epd2In9<HW, STATE>
-where
-    HW: EpdHw,
-    STATE: State,
-{
-    hw: HW,
-    state: STATE,
-}
-
 trait StateInternal {}
 #[allow(private_bounds)]
 pub trait State: StateInternal {}
@@ -234,6 +219,21 @@ pub struct StateAsleep<W: StateAwake> {
 }
 impl<W: StateAwake> StateInternal for StateAsleep<W> {}
 impl<W: StateAwake> State for StateAsleep<W> {}
+
+/// Controls v1 of the 2.9" Waveshare e-paper display.
+///
+/// * [datasheet](https://files.waveshare.com/upload/e/e6/2.9inch_e-Paper_Datasheet.pdf)
+/// * [sample code](https://github.com/waveshareteam/e-Paper/blob/master/RaspberryPi_JetsonNano/python/lib/waveshare_epd/epd2in9.py)
+///
+/// The display has a portrait orientation. This uses [BinaryColor], where `Off` is black and `On` is white.
+pub struct Epd2In9<HW, STATE>
+where
+    HW: EpdHw,
+    STATE: State,
+{
+    hw: HW,
+    state: STATE,
+}
 
 impl<HW> Epd2In9<HW, StateUninitialized>
 where
@@ -399,7 +399,23 @@ impl<HW: EpdHw> Epd2In9<HW, StateReady> {
     ) -> Result<(), HW::Error> {
         self.send(spi, Command::WriteLut, mode.lut()).await?;
         self.state.mode = mode;
-        Ok(())
+
+        // Update bypass if needed.
+        match mode {
+            RefreshMode::Partial => {
+                self.send(spi, Command::DisplayUpdateControl1, &[0x00])
+                    .await
+            }
+            RefreshMode::PartialBlackBypass => {
+                self.send(spi, Command::DisplayUpdateControl1, &[0x90])
+                    .await
+            }
+            RefreshMode::PartialWhiteBypass => {
+                self.send(spi, Command::DisplayUpdateControl1, &[0x80])
+                    .await
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -453,7 +469,7 @@ impl<HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9<HW, StateRe
     ///
     /// * to prep the next frame before the current one has been displayed (since the old buffer
     ///   becomes the current buffer after the next call to [Self::update_display()]).
-    /// * to modify the "diff" that is displayed if in [RefreshMode::Partial]. Also see [Command::DisplayUpdateControl1].
+    /// * to modify the "diff base" if in [RefreshMode::Partial]. Also see [Command::DisplayUpdateControl1].
     async fn write_base_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
