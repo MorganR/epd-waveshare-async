@@ -266,8 +266,8 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
 /// A buffer supporting 2-bit grayscale colours. This buffer splits the 2 bits into two separate single-bit framebuffers.
 #[derive(Clone)]
 pub struct Gray2SplitBuffer<const L: usize> {
-    low: BinaryBuffer<L>,
-    high: BinaryBuffer<L>,
+    pub low: BinaryBuffer<L>,
+    pub high: BinaryBuffer<L>,
 }
 
 /// Computes the correct size for the [Gray2SplitBuffer] based on the given dimensions.
@@ -292,16 +292,6 @@ impl<const L: usize> Gray2SplitBuffer<L> {
             low: BinaryBuffer::new(dimensions),
             high: BinaryBuffer::new(dimensions),
         }
-    }
-
-    /// Access the low-bit framebuffer.
-    pub fn low(&self) -> &BinaryBuffer<L> {
-        &self.low
-    }
-
-    /// Access the high-bit framebuffer.
-    pub fn high(&self) -> &BinaryBuffer<L> {
-        &self.high
     }
 }
 
@@ -718,8 +708,8 @@ mod tests {
         buffer
             .draw_iter([Pixel(Point::new(0, 0), Gray2::new(0b11))])
             .unwrap();
-        assert_eq!(buffer.low().data[0], 0b10000000);
-        assert_eq!(buffer.high().data[0], 0b10000000);
+        assert_eq!(buffer.low.data[0], 0b10000000);
+        assert_eq!(buffer.high.data[0], 0b10000000);
 
         // Draw a pixel in the center.
         buffer
@@ -732,8 +722,8 @@ mod tests {
         buffer
             .draw_iter([Pixel(Point::new(15, 3), Gray2::new(0b01))])
             .unwrap();
-        assert_eq!(buffer.low().data[7], 0b1);
-        assert_eq!(buffer.high().data[7], 0b0);
+        assert_eq!(buffer.low.data[7], 0b1);
+        assert_eq!(buffer.high.data[7], 0b0);
     }
 
     #[test]
@@ -753,10 +743,10 @@ mod tests {
             ])
             .unwrap();
 
-        assert_eq!(buffer.low().data[0], 0b01010000);
-        assert_eq!(buffer.high().data[0], 0b01000000);
-        assert_eq!(buffer.low().data[2], 0b00000000);
-        assert_eq!(buffer.high().data[2], 0b01000000);
+        assert_eq!(buffer.low.data[0], 0b01010000);
+        assert_eq!(buffer.high.data[0], 0b01000000);
+        assert_eq!(buffer.low.data[2], 0b00000000);
+        assert_eq!(buffer.high.data[2], 0b01000000);
     }
 
     #[test]
