@@ -10,7 +10,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Morgan Roff"]
-version = "0.2.0"
+version = "0.2.1-alpha"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/MorganR/epd-waveshare-async"
