@@ -1,68 +1,55 @@
 #![no_std]
 
 use core::convert::Infallible;
+use core::marker::PhantomData;
 
 use defmt::error;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_embedded_hal::shared_bus::SpiDeviceError;
-use embassy_rp::gpio::{Input, Level, Output, Pull};
-use embassy_rp::peripherals;
-use embassy_rp::Peri;
+use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
 use embassy_rp::spi::{self, Spi};
+use embassy_rp::Peri;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Delay;
-use epd_waveshare_async::EpdHw;
+use epd_waveshare_async::{EpdHw, Error as EpdError};
 use thiserror::Error as ThisError;
 use {defmt_rtt as _, panic_probe as _};
 
-// Define the resources needed to communicate with the display.
-assign_resources::assign_resources! {
-    spi_hw: SpiP {
-        spi: SPI0,
-        clk: PIN_2,
-        tx: PIN_3,
-        rx: PIN_4,
-        dma_tx: DMA_CH1,
-        dma_rx: DMA_CH2,
-        cs: PIN_5,
-    },
-    epd_hw: DisplayP {
-        reset: PIN_7,
-        dc: PIN_6,
-        busy: PIN_8,
-    },
-}
-
 /// Defines the hardware to use for connecting to the display.
-pub struct DisplayHw<'a> {
+pub struct DisplayHw<'a, SPI: spi::Instance> {
     dc: Output<'a>,
     reset: Output<'a>,
     busy: Input<'a>,
     delay: Delay,
+    _spi: PhantomData<SPI>,
 }
 
-impl DisplayHw<'_> {
-    pub fn new(p: DisplayP) -> Self {
-        let dc = Output::new(p.dc, Level::High);
-        let reset = Output::new(p.reset, Level::High);
-        let busy = Input::new(p.busy, Pull::Up);
+impl<'a, SPI: spi::Instance> DisplayHw<'a, SPI> {
+    pub fn new<DC: Pin, RESET: Pin, BUSY: Pin>(
+        dc: Peri<'a, DC>,
+        reset: Peri<'a, RESET>,
+        busy: Peri<'a, BUSY>,
+    ) -> Self {
+        let dc = Output::new(dc, Level::High);
+        let reset = Output::new(reset, Level::High);
+        let busy = Input::new(busy, Pull::Up);
 
         Self {
             dc,
             reset,
             busy,
             delay: Delay,
+            _spi: PhantomData {},
         }
     }
 }
 
 pub type RawSpiError = SpiDeviceError<spi::Error, Infallible>;
 
-type EpdSpiDevice<'a> =
-    SpiDevice<'a, NoopRawMutex, Spi<'a, peripherals::SPI0, spi::Async>, Output<'a>>;
+type EpdSpiDevice<'a, SPI> = SpiDevice<'a, NoopRawMutex, Spi<'a, SPI, spi::Async>, Output<'a>>;
 
-impl<'a> EpdHw for DisplayHw<'a> {
-    type Spi = EpdSpiDevice<'a>;
+impl<'a, SPI: spi::Instance + 'a> EpdHw for DisplayHw<'a, SPI> {
+    type Spi = EpdSpiDevice<'a, SPI>;
 
     type Dc = Output<'a>;
 
@@ -95,6 +82,8 @@ impl<'a> EpdHw for DisplayHw<'a> {
 pub enum Error {
     #[error("SPI error: {0:?}")]
     SpiError(RawSpiError),
+    #[error("Display error: {0:?}")]
+    DisplayError(EpdError),
 }
 
 impl From<Infallible> for Error {
@@ -106,5 +95,11 @@ impl From<Infallible> for Error {
 impl From<RawSpiError> for Error {
     fn from(e: RawSpiError) -> Self {
         Error::SpiError(e)
+    }
+}
+
+impl From<EpdError> for Error {
+    fn from(e: EpdError) -> Self {
+        Error::DisplayError(e)
     }
 }

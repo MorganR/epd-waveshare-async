@@ -7,7 +7,9 @@ use defmt::{expect, info};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{Level, Output};
+use embassy_rp::peripherals;
 use embassy_rp::spi::{self, Spi};
+use embassy_rp::Peri;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Instant, Timer};
@@ -20,10 +22,26 @@ use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle};
 use epd_waveshare_async::epd2in9::{self};
 use epd_waveshare_async::{
     epd2in9::{Epd2In9, RefreshMode},
-    Epd,
+    *,
 };
 use rp_samples::*;
 use {defmt_rtt as _, panic_probe as _};
+
+// Define the resources needed to communicate with the display.
+assign_resources::assign_resources! {
+    spi_hw: SpiP {
+        spi: SPI0,
+        clk: PIN_2,
+        tx: PIN_3,
+        dma_tx: DMA_CH1,
+        cs: PIN_5,
+    },
+    epd_hw: DisplayP {
+        reset: PIN_7,
+        dc: PIN_6,
+        busy: PIN_8,
+    },
+}
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -46,33 +64,35 @@ async fn main(_spawner: Spawner) {
         embedded_hal_async::spi::Polarity::IdleLow => embassy_rp::spi::Polarity::IdleLow,
     };
 
-    let raw_spi: Mutex<NoopRawMutex, _> = Mutex::new(Spi::new(
+    let raw_spi: Mutex<NoopRawMutex, _> = Mutex::new(Spi::new_txonly(
         resources.spi_hw.spi,
         resources.spi_hw.clk,
         resources.spi_hw.tx,
-        resources.spi_hw.rx,
         resources.spi_hw.dma_tx,
-        resources.spi_hw.dma_rx,
         config,
     ));
     // CS is active low.
     let cs_pin = Output::new(resources.spi_hw.cs, Level::High);
     let mut spi = SpiDevice::new(&raw_spi, cs_pin);
-    let mut epd = Epd2In9::new(DisplayHw::new(resources.epd_hw));
+    let epd = Epd2In9::new(DisplayHw::new(
+        resources.epd_hw.dc,
+        resources.epd_hw.reset,
+        resources.epd_hw.busy,
+    ));
 
     info!("Initializing EPD");
-    expect!(
+    let mut epd = expect!(
         epd.init(&mut spi, RefreshMode::Full).await,
         "Failed to initialize EPD"
     );
 
-    let mut buffer = epd.new_buffer();
+    let mut buffer = epd2in9::new_buffer();
     buffer
         .fill_solid(&buffer.bounding_box(), BinaryColor::On)
         .unwrap();
     info!("Displaying white buffer");
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display buffer"
     );
     Timer::after_secs(4).await;
@@ -91,7 +111,7 @@ async fn main(_spawner: Spawner) {
     let text = Text::with_text_style("Hello, EPD!", Point::new(10, 10), character_style, style);
     text.draw(&mut buffer).unwrap();
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display text buffer"
     );
     Timer::after_secs(4).await;
@@ -128,7 +148,7 @@ async fn main(_spawner: Spawner) {
         (after_buffer_draw - before_buffer_draw).as_millis()
     );
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display check buffer"
     );
     Timer::after_secs(4).await;
@@ -149,7 +169,7 @@ async fn main(_spawner: Spawner) {
         .await
         .unwrap();
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display black half of text"
     );
 
@@ -168,16 +188,16 @@ async fn main(_spawner: Spawner) {
         .await
         .unwrap();
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display white half of text"
     );
 
     info!("Sleeping EPD");
-    expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
+    let epd = expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     Timer::after_secs(2).await;
 
     info!("Waking EPD");
-    expect!(epd.wake(&mut spi).await, "Failed to wake EPD");
+    let mut epd = expect!(epd.wake(&mut spi).await, "Failed to wake EPD");
     Timer::after_secs(1).await;
 
     // Prepare for border updates. These require full refresh mode.
@@ -188,7 +208,7 @@ async fn main(_spawner: Spawner) {
 
     // Clear both framebuffers to make the border more obvious.
     buffer.clear(BinaryColor::On).unwrap();
-    epd.write_old_framebuffer(&mut spi, &buffer).await.unwrap();
+    epd.write_base_framebuffer(&mut spi, &buffer).await.unwrap();
     epd.write_framebuffer(&mut spi, &buffer).await.unwrap();
     info!("Setting white border");
     expect!(
@@ -212,6 +232,6 @@ async fn main(_spawner: Spawner) {
     );
     Timer::after_secs(3).await;
 
-    expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
+    let _epd = expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     info!("Done");
 }
