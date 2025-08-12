@@ -109,7 +109,7 @@ async fn main(_spawner: Spawner) {
         "Hello, EPD!",
         Point::new(10, 10),
         character_style,
-        text_style.clone(),
+        text_style,
     );
     text.draw(&mut buffer).unwrap();
     expect!(
@@ -167,7 +167,7 @@ async fn main(_spawner: Spawner) {
         "Black text",
         Point::new(10, 30),
         character_style,
-        text_style.clone(),
+        text_style,
     );
     text.draw(&mut buffer).unwrap();
     epd.display_framebuffer(&mut spi, &buffer).await.unwrap();
@@ -207,7 +207,7 @@ async fn main(_spawner: Spawner) {
         "I'm awake!",
         Point::new(10, 30),
         character_style,
-        text_style.clone(),
+        text_style,
     );
     text.draw(&mut buffer).unwrap();
     expect!(
@@ -236,7 +236,7 @@ async fn main(_spawner: Spawner) {
         "White text",
         Point::new(10, 60),
         character_style,
-        text_style.clone(),
+        text_style,
     );
     text.draw(&mut buffer).unwrap();
     // Read the base as all black when doing the diff.
