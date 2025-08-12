@@ -4,11 +4,27 @@
 
 Async drivers for Waveshare's e-paper displays.
 
-This is inspired by both the existing (sync) [epd-waveshare](https://github.com/caemor/epd-waveshare) crate, and the [e-Paper](https://github.com/waveshareteam/e-Paper/tree/master) code published by Waveshare directly.
+This is inspired by both the existing (sync) [epd-waveshare](https://github.com/caemor/epd-waveshare)
+crate, and the [e-Paper](https://github.com/waveshareteam/e-Paper/tree/master) code published by
+Waveshare directly.
 
-To start, this library will only support the display(s) I am actively testing with it. Once in a stable state, contributions for more displays will be welcome.
+However, it diverges significantly in the public interface for the displays, with a focus on
+**clarity, correctness, and flexibility**.
 
-## Developing
+## Drivers
+
+This library only supports a small set of screens for which I have confirmed all functionality.
+Drivers should all be tested on real displays using a sample program (see below). Each driver
+should go in its own module.
+
+## Samples
+
+Sample code should exist for each display driver, to both demonstrate its use and to act as a test
+case that can be easily run. These live in the `samples` folder, with one subfolder per
+microcontroller. A sample just needs to be provided for at least one microcontroller per display
+driver.
+
+## Development
 
 ### Set up
 
@@ -19,4 +35,4 @@ We also use [Husky](https://typicode.github.io/husky/) to run formatters and lin
 1. Install [NVM](https://github.com/nvm-sh/nvmhttps://github.com/nvm-sh/nvm): `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash`
 2. Run `nvm install` to get a consistent version of node
 3. Run `npm ci`
-4. Install [rustfmt](https://github.com/rust-lang/rustfmt) if needed: `rustup component add rustfmt`. You can run `cargo fmt` to see if this is already installed.
+4. If needed, install [rustfmt](https://github.com/rust-lang/rustfmt): `rustup component add rustfmt`. You can run `cargo fmt` to see if this is already installed.

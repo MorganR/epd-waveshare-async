@@ -4,11 +4,21 @@ use core::{
 };
 
 use embedded_graphics::{
-    pixelcolor::BinaryColor,
-    prelude::{Dimensions, DrawTarget, Point, Size},
+    pixelcolor::{BinaryColor, Gray2},
+    prelude::{Dimensions, DrawTarget, GrayColor, Point, Size},
     primitives::Rectangle,
     Pixel,
 };
+use heapless::Vec;
+
+/// Provides a view into a display buffer's data. This buffer is encoded into a set number of frames and bits per pixel.
+pub trait BufferView<const BITS: usize, const FRAMES: usize> {
+    /// Returns the display window covered by this buffer.
+    fn window(&self) -> Rectangle;
+
+    /// Returns the data to be written to this window.
+    fn data(&self) -> [&[u8]; FRAMES];
+}
 
 /// A compact buffer for storing binary coloured display data.
 ///
@@ -49,6 +59,7 @@ impl<const L: usize> BinaryBuffer<L> {
             L,
             "Size must match given dimensions"
         );
+
         Self {
             bytes_per_row: dimensions.width as usize / 8,
             size: dimensions,
@@ -59,6 +70,16 @@ impl<const L: usize> BinaryBuffer<L> {
     /// Access the packed buffer data.
     pub fn data(&self) -> &[u8] {
         &self.data
+    }
+}
+
+impl<const L: usize> BufferView<1, 1> for BinaryBuffer<L> {
+    fn window(&self) -> Rectangle {
+        Rectangle::new(Point::zero(), self.size)
+    }
+
+    fn data(&self) -> [&[u8]; 1] {
+        [self.data()]
     }
 }
 
@@ -104,9 +125,11 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
         I: IntoIterator<Item = Self::Color>,
     {
         // Benchmarking: 39ms for checker pattern in epd2in9 sample program.
-        let drawable_area = self.bounding_box().intersection(area);
-        if drawable_area.size.width == 0 || drawable_area.size.height == 0 {
-            return Ok(()); // Nothing to fill
+        {
+            let drawable_area = self.bounding_box().intersection(area);
+            if drawable_area.size.width == 0 || drawable_area.size.height == 0 {
+                return Ok(()); // Nothing to fill
+            }
         }
 
         let y_start = area.top_left.y;
@@ -115,7 +138,6 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
         let x_end = area.top_left.x + area.size.width as i32;
 
         let mut colors_iter = colors.into_iter();
-        // TODO: Adjust indexes to be within bounds.
         let mut byte_index = max(y_start, 0) as usize * self.bytes_per_row;
         let row_start_byte_offset = max(x_start, 0) as usize / 8;
         let row_end_byte_offset =
@@ -188,6 +210,8 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
             byte_index += row_start_byte_offset;
             let mut bit_index = (x_start as usize) % 8;
 
+            /// Sets the next bit from `color` and advances `bit_index` and `byte_index`
+            /// appropriately.
             macro_rules! set_next_bit {
                 () => {
                     if color == BinaryColor::On {
@@ -205,10 +229,12 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
             }
 
             if num_full_bytes_per_row == 0 {
+                // There are no full bytes in this row, so just set colors bitwise.
                 for _x in x_start..x_end {
                     set_next_bit!();
                 }
             } else {
+                // Set colors bitwise in the first byte if it's not byte-aligned.
                 for _x in x_start..x_full_bytes_start {
                     set_next_bit!();
                 }
@@ -233,6 +259,113 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
             byte_index += row_end_byte_offset;
         }
 
+        Ok(())
+    }
+}
+
+/// A buffer supporting 2-bit grayscale colours. This buffer splits the 2 bits into two separate single-bit framebuffers.
+#[derive(Clone)]
+pub struct Gray2SplitBuffer<const L: usize> {
+    pub low: BinaryBuffer<L>,
+    pub high: BinaryBuffer<L>,
+}
+
+/// Computes the correct size for the [Gray2SplitBuffer] based on the given dimensions.
+pub const fn gray2_split_buffer_length(size: Size) -> usize {
+    binary_buffer_length(size)
+}
+
+impl<const L: usize> Gray2SplitBuffer<L> {
+    /// Creates a new [Gray2SplitBuffer] with all pixels set to 0.
+    ///
+    /// The dimensions must match the buffer length `L`, and the width must be a multiple of 8.
+    ///
+    /// ```
+    /// use embedded_graphics::prelude::Size;
+    /// use epd_waveshare_async::buffer::{gray2_split_buffer_length, Gray2SplitBuffer};
+    ///
+    /// const DIMENSIONS: Size = Size::new(8, 8);
+    /// let buffer = Gray2SplitBuffer::<{gray2_split_buffer_length(DIMENSIONS)}>::new(DIMENSIONS);
+    /// ```
+    pub fn new(dimensions: Size) -> Self {
+        Self {
+            low: BinaryBuffer::new(dimensions),
+            high: BinaryBuffer::new(dimensions),
+        }
+    }
+}
+
+impl<const L: usize> BufferView<1, 2> for Gray2SplitBuffer<L> {
+    fn window(&self) -> Rectangle {
+        Rectangle::new(Point::zero(), self.low.size)
+    }
+
+    fn data(&self) -> [&[u8]; 2] {
+        [self.low.data(), self.high.data()]
+    }
+}
+
+impl<const L: usize> Dimensions for Gray2SplitBuffer<L> {
+    fn bounding_box(&self) -> Rectangle {
+        Rectangle::new(Point::zero(), self.low.size)
+    }
+}
+
+fn to_low_and_high_as_binary(g: Gray2) -> (BinaryColor, BinaryColor) {
+    let luma = g.luma();
+    let low = if (luma & 1) == 0 {
+        BinaryColor::Off
+    } else {
+        BinaryColor::On
+    };
+    let high = if (luma & 0b10) == 0 {
+        BinaryColor::Off
+    } else {
+        BinaryColor::On
+    };
+    (low, high)
+}
+
+const GRAY_ITER_CHUNK_SIZE: usize = 128;
+
+impl<const L: usize> DrawTarget for Gray2SplitBuffer<L> {
+    type Color = Gray2;
+
+    type Error = Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        // We iterate the data into chunks because:
+        // 1. It's usually less memory pressure than creating two more full-size vectors.
+        // 2. The iterator is allowed to go out-of-bounds, so it might actually be longer than L.
+        let mut low_chunk: Vec<Pixel<BinaryColor>, GRAY_ITER_CHUNK_SIZE> = Vec::new();
+        let mut high_chunk: Vec<Pixel<BinaryColor>, GRAY_ITER_CHUNK_SIZE> = Vec::new();
+        for p in pixels.into_iter() {
+            let (low, high) = to_low_and_high_as_binary(p.1);
+            if low_chunk.is_full() {
+                self.low.draw_iter(low_chunk)?;
+                low_chunk = Vec::new();
+                self.high.draw_iter(high_chunk)?;
+                high_chunk = Vec::new();
+            }
+            unsafe {
+                low_chunk.push_unchecked(Pixel(p.0, low));
+                high_chunk.push_unchecked(Pixel(p.0, high));
+            }
+        }
+        if !low_chunk.is_empty() {
+            self.low.draw_iter(low_chunk)?;
+            self.high.draw_iter(high_chunk)?;
+        }
+        Ok(())
+    }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        let (low, high) = to_low_and_high_as_binary(color);
+        self.low.fill_solid(area, low)?;
+        self.high.fill_solid(area, high)?;
         Ok(())
     }
 }
@@ -262,7 +395,7 @@ pub trait Rotation {
     fn rotate_rectangle(&self, rectangle: Rectangle, bounds: Size) -> Rectangle;
 }
 
-/// Represents a 90, 180, or 270 degree rotation of a point within a given size.
+/// Represents a 90, 180, or 270 degree clockwise rotation of a point within a given size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rotate {
     Degrees90,
@@ -381,6 +514,14 @@ impl<B: DrawTarget, R: Rotation> DrawTarget for RotatedBuffer<B, R> {
         });
         self.buffer.draw_iter(rotated_pixels)
     }
+}
+
+#[inline(always)]
+/// Splits a 16-bit value into the two 8-bit values representing the low and high bytes.
+pub(crate) fn split_low_and_high(value: u16) -> (u8, u8) {
+    let low = (value & 0xFF) as u8;
+    let high = ((value >> 8) & 0xFF) as u8;
+    (low, high)
 }
 
 #[cfg(test)]
@@ -555,6 +696,150 @@ mod tests {
             0b00000000, 0b00000000, 0b00001111,
         ];
         assert_eq!(buffer.data(), &expected);
+    }
+
+    #[test]
+    fn test_gray2_split_buffer_draw_iter_singles() {
+        const SIZE: Size = Size::new(16, 4);
+        const BUFFER_LENGTH: usize = gray2_split_buffer_length(SIZE);
+        let mut buffer = Gray2SplitBuffer::<{ BUFFER_LENGTH }>::new(SIZE);
+
+        // Draw a pixel at the beginning.
+        buffer
+            .draw_iter([Pixel(Point::new(0, 0), Gray2::new(0b11))])
+            .unwrap();
+        assert_eq!(buffer.low.data[0], 0b10000000);
+        assert_eq!(buffer.high.data[0], 0b10000000);
+
+        // Draw a pixel in the center.
+        buffer
+            .draw_iter([Pixel(Point::new(10, 2), Gray2::new(0b10))])
+            .unwrap();
+        assert_eq!(buffer.data()[0][5], 0b00000000);
+        assert_eq!(buffer.data()[1][5], 0b00100000);
+
+        // Draw a pixel at the end.
+        buffer
+            .draw_iter([Pixel(Point::new(15, 3), Gray2::new(0b01))])
+            .unwrap();
+        assert_eq!(buffer.low.data[7], 0b1);
+        assert_eq!(buffer.high.data[7], 0b0);
+    }
+
+    #[test]
+    fn test_gray2_buffer_draw_iter_multiple() {
+        const SIZE: Size = Size::new(16, 4);
+        const BUFFER_LENGTH: usize = gray2_split_buffer_length(SIZE);
+        let mut buffer = Gray2SplitBuffer::<{ BUFFER_LENGTH }>::new(SIZE);
+
+        // Draw several pixels in a row.
+        buffer
+            .draw_iter([
+                Pixel(Point::new(1, 0), Gray2::new(0b11)),
+                Pixel(Point::new(2, 0), Gray2::new(0b11)),
+                Pixel(Point::new(3, 0), Gray2::new(0b01)),
+                Pixel(Point::new(2, 0), Gray2::new(0)),
+                Pixel(Point::new(1, 1), Gray2::new(0b10)),
+            ])
+            .unwrap();
+
+        assert_eq!(buffer.low.data[0], 0b01010000);
+        assert_eq!(buffer.high.data[0], 0b01000000);
+        assert_eq!(buffer.low.data[2], 0b00000000);
+        assert_eq!(buffer.high.data[2], 0b01000000);
+    }
+
+    #[test]
+    fn test_gray2_buffer_draw_iter_out_of_bounds() {
+        const SIZE: Size = Size::new(16, 4);
+        const BUFFER_LENGTH: usize = gray2_split_buffer_length(SIZE);
+        let mut buffer = Gray2SplitBuffer::<{ BUFFER_LENGTH }>::new(SIZE);
+        let previous = buffer.clone();
+
+        // Draw several pixels in a row.
+        buffer
+            .draw_iter([
+                Pixel(Point::new(-1, 0), Gray2::new(0b11)),
+                Pixel(Point::new(0, -1), Gray2::new(0b11)),
+                Pixel(Point::new(16, 0), Gray2::new(0b11)),
+                Pixel(Point::new(0, 4), Gray2::new(0b11)),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            buffer.data(),
+            previous.data(),
+            "Data should not change when drawing out-of-bounds pixels."
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn test_gray2_buffer_must_have_aligned_width() {
+        let _ = Gray2SplitBuffer::<16>::new(Size::new(10, 10));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn test_gray2_buffer_size_must_match_dimensions() {
+        let _ = Gray2SplitBuffer::<16>::new(Size::new(16, 10));
+    }
+
+    #[test]
+    fn test_gray2_buffer_fill_solid() {
+        // 8 rows, 1 byte each.
+        const SIZE: Size = Size::new(24, 8);
+        const BUFFER_LENGTH: usize = gray2_split_buffer_length(SIZE);
+        let mut buffer = Gray2SplitBuffer::<{ BUFFER_LENGTH }>::new(SIZE);
+
+        // Draw diagonal squares.
+        buffer
+            .fill_solid(
+                &Rectangle::new(Point::new(-4, -4), Size::new(8, 8)),
+                Gray2::new(0b11),
+            )
+            .unwrap();
+        buffer
+            .fill_solid(
+                // Go out of bounds to ensure it doesn't panic.
+                &Rectangle::new(Point::new(6, 2), Size::new(12, 4)),
+                Gray2::new(0b10),
+            )
+            .unwrap();
+        buffer
+            .fill_solid(
+                // Go out of bounds to ensure it doesn't panic.
+                &Rectangle::new(Point::new(20, 4), Size::new(8, 8)),
+                Gray2::new(0b01),
+            )
+            .unwrap();
+
+        #[rustfmt::skip]
+        let expected_low: [u8; 3 * 8] = [
+            0b11110000, 0b00000000, 0b00000000,
+            0b11110000, 0b00000000, 0b00000000,
+            0b11110000, 0b00000000, 0b00000000,
+            0b11110000, 0b00000000, 0b00000000,
+            0b00000000, 0b00000000, 0b00001111,
+            0b00000000, 0b00000000, 0b00001111,
+            0b00000000, 0b00000000, 0b00001111,
+            0b00000000, 0b00000000, 0b00001111,
+        ];
+        #[rustfmt::skip]
+        let expected_high: [u8; 3 * 8] = [
+            0b11110000, 0b00000000, 0b00000000,
+            0b11110000, 0b00000000, 0b00000000,
+            0b11110011, 0b11111111, 0b11000000,
+            0b11110011, 0b11111111, 0b11000000,
+            0b00000011, 0b11111111, 0b11000000,
+            0b00000011, 0b11111111, 0b11000000,
+            0b00000000, 0b00000000, 0b00000000,
+            0b00000000, 0b00000000, 0b00000000,
+        ];
+        assert_eq!(buffer.data()[0], &expected_low);
+        assert_eq!(buffer.data()[1], &expected_high);
     }
 
     #[test]

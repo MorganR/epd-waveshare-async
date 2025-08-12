@@ -1,19 +1,20 @@
 use core::time::Duration;
 use embedded_graphics::{
     pixelcolor::BinaryColor,
-    prelude::{Dimensions, Point, Size},
+    prelude::{Point, Size},
     primitives::Rectangle,
 };
 use embedded_hal::{
-    digital::{InputPin, OutputPin},
+    digital::OutputPin,
     spi::{Phase, Polarity},
 };
-use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
+use embedded_hal_async::delay::DelayNs;
 
 use crate::{
-    buffer::{binary_buffer_length, BinaryBuffer},
-    log::{debug, trace},
-    Epd, EpdHw,
+    buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView},
+    hw::CommandDataSend as _,
+    log::{debug, debug_assert},
+    DisplayPartial, DisplaySimple, Displayable, EpdHw, Reset, Sleep, Wake,
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -41,9 +42,18 @@ pub enum RefreshMode {
     /// It's recommended to avoid full refreshes less than [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] apart,
     /// but to do a full refresh at least every [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
     Full,
-    /// Use the partial update LUT for fast refresh. A full refresh should be done occasionally to
+    /// Uses the partial update LUT for fast refresh. A full refresh should be done occasionally to
     /// avoid ghosting, see [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
+    ///
+    /// This is the standard "fast" update. It diffs the current framebuffer against the
+    /// previous framebuffer, and just updates the pixels that differ.
     Partial,
+    /// Uses the partial update LUT for a fast refresh, but only updates black (`BinaryColor::Off`)
+    /// pixels from the current framebuffer. The previous framebuffer is ignored.
+    PartialBlackBypass,
+    /// Uses the partial update LUT for a fast refresh, but only updates white (`BinaryColor::On`)
+    /// pixels from the current framebuffer. The previous framebuffer is ignored.
+    PartialWhiteBypass,
 }
 
 impl RefreshMode {
@@ -51,7 +61,7 @@ impl RefreshMode {
     pub fn lut(&self) -> &[u8; 30] {
         match self {
             RefreshMode::Full => &LUT_FULL_UPDATE,
-            RefreshMode::Partial => &LUT_PARTIAL_UPDATE,
+            _ => &LUT_PARTIAL_UPDATE,
         }
     }
 }
@@ -72,6 +82,9 @@ pub const RECOMMENDED_SPI_PHASE: Phase = Phase::CaptureOnFirstTransition;
 /// on the rising edge.
 pub const RECOMMENDED_SPI_POLARITY: Polarity = Polarity::IdleLow;
 
+/// Low-level commands for the Epd2In9. You probably want to use the other methods exposed on the
+/// [Epd2In9] for most operations, but can send commands directly with [Epd2In9::send] for low-level
+/// control or experimentation.
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -87,15 +100,28 @@ pub enum Command {
     SwReset = 0x12,
     /// Writes to the temperature register.
     TemperatureSensorControl = 0x1A,
-    /// Activates the display update sequence. This must be set beforehand using [DisplayUpdateControl2].
+    /// Activates the display update sequence. This must be set beforehand using [Command::DisplayUpdateControl2].
     /// This operation must not be interrupted.
     MasterActivation = 0x20,
-    /// Used for a RAM "bypass" mode, though the precise meaning is unclear.
+    /// Used for a RAM "bypass" mode when using [RefreshMode::Partial]. This is poorly explained in the docs,
+    /// but essentially we have three options:
+    ///
+    /// 1. `0x00` (default): just update the pixels that have changed **between the two internal
+    ///    frame buffers**. This normally does what you expect. You can hack it a bit to do
+    ///    interesting things by writing to both the old and new frame buffers.
+    /// 2. `0x80`: just update the white (`BinaryColor::On`) pixels in the current frame buffer. It
+    ///    doesn't matter what is in the old frame buffer.
+    /// 3. `0x90`: just update the black (`BinaryColor::Off`) pixels in the current frame buffer.
+    ///    It doesn't matter what is in the old frame buffer.
+    ///
+    /// Options 2 and 3 are what the datasheet calls "bypass" mode.
     DisplayUpdateControl1 = 0x21,
-    /// Configures the display update sequence for use with [MasterActivation].
+    /// Configures the display update sequence for use with [Command::MasterActivation].
     DisplayUpdateControl2 = 0x22,
-    /// Writes data to RAM, auto-incrementing the address counter.
+    /// Writes data to the current frame buffer, auto-incrementing the address counter.
     WriteRam = 0x24,
+    /// Writes data to the old frame buffer, auto-incrementing the address counter.
+    WriteOldRam = 0x26,
     /// Writes to the VCOM register.
     WriteVcom = 0x2C,
     /// Writes the LUT register (30 bytes, exclude the VSH/VSL and dummy bits).
@@ -107,16 +133,23 @@ pub enum Command {
     /// Register to configure the behaviour of the border.
     BorderWaveformControl = 0x3C,
     /// Sets the start and end positions of the X axis for the auto-incrementing address counter.
-    /// Note that the x position can only be configured as a multiple of 8.
+    /// Start and end are inclusive.
+    ///
+    /// Note that the x position can only be written on a whole byte basis (8 bits at once). The
+    /// start and end positions are therefore sent right shifted 3 bits to indicate the byte number
+    /// being written. For example, to write the first 32 x positions, you would send 0 (0 >> 3 =
+    /// 0), and 3 (31 >> 3 = 3). If you tried to write just the first 25 x positions, you would end
+    /// up sending the same values and actually writing all 32.
     SetRamXStartEnd = 0x44,
     /// Sets the start and end positions of the Y axis for the auto-incrementing address counter.
+    /// Start and end are inclusive.
     SetRamYStartEnd = 0x45,
     /// Sets the current x coordinate of the address counter.
     /// Note that the x position can only be configured as a multiple of 8.
     SetRamX = 0x4E,
     /// Sets the current y coordinate of the address counter.
     SetRamY = 0x4F,
-    /// Does nothing, but can be used to terminate other commands such as [WriteRam]
+    /// Does nothing, but can be used to terminate other commands such as [Command::WriteRam]
     Noop = 0xFF,
 }
 
@@ -125,6 +158,17 @@ impl Command {
     fn register(&self) -> u8 {
         *self as u8
     }
+}
+
+/// The length of the underlying buffer used by [Epd2In9].
+pub const BINARY_BUFFER_LENGTH: usize =
+    binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32));
+/// The buffer type used by [Epd2In9].
+pub type Epd2In9Buffer =
+    BinaryBuffer<{ binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)) }>;
+/// Constructs a new buffer for use with the [Epd2In9] display.
+pub fn new_buffer() -> Epd2In9Buffer {
+    Epd2In9Buffer::new(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32))
 }
 
 /// This should be sent with [Command::DriverOutputControl] during initialisation.
@@ -142,102 +186,80 @@ const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xD7, 0xD6, 0x9D];
 // Datasheet:
 // const BOOSTER_SOFT_START_INIT_DATA: [u8; 3] = [0xCF, 0xCE, 0x8D];
 
+trait StateInternal {}
+#[allow(private_bounds)]
+pub trait State: StateInternal {}
+pub trait StateAwake: State {}
+
+macro_rules! impl_base_state {
+    ($state:ident) => {
+        impl StateInternal for $state {}
+        impl State for $state {}
+    };
+}
+
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateUninitialized();
+impl_base_state!(StateUninitialized);
+impl StateAwake for StateUninitialized {}
+
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateReady {
+    mode: RefreshMode,
+}
+impl_base_state!(StateReady);
+impl StateAwake for StateReady {}
+
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateAsleep<W: StateAwake> {
+    wake_state: W,
+}
+impl<W: StateAwake> StateInternal for StateAsleep<W> {}
+impl<W: StateAwake> State for StateAsleep<W> {}
+
 /// Controls v1 of the 2.9" Waveshare e-paper display.
 ///
 /// * [datasheet](https://files.waveshare.com/upload/e/e6/2.9inch_e-Paper_Datasheet.pdf)
 /// * [sample code](https://github.com/waveshareteam/e-Paper/blob/master/RaspberryPi_JetsonNano/python/lib/waveshare_epd/epd2in9.py)
 ///
 /// The display has a portrait orientation. This uses [BinaryColor], where `Off` is black and `On` is white.
-pub struct Epd2In9<HW>
+pub struct Epd2In9<HW, STATE>
 where
     HW: EpdHw,
+    STATE: State,
 {
     hw: HW,
+    state: STATE,
 }
 
-impl<HW> Epd2In9<HW>
+impl<HW> Epd2In9<HW, StateUninitialized>
 where
     HW: EpdHw,
 {
     pub fn new(hw: HW) -> Self {
-        Epd2In9 { hw }
-    }
-
-    /// Sets the border to the specified colour. You need to call [Epd::update_display] using
-    /// [RefreshMode::Full] afterwards to apply this change.
-    pub async fn set_border(
-        &mut self,
-        spi: &mut HW::Spi,
-        color: BinaryColor,
-    ) -> Result<(), HW::Error> {
-        let border_setting: u8 = match color {
-            BinaryColor::Off => 0x00,
-            BinaryColor::On => 0x01,
-        };
-        self.send(spi, Command::BorderWaveformControl, &[border_setting])
-            .await
-    }
-
-    /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
-    async fn send(
-        &mut self,
-        spi: &mut HW::Spi,
-        command: Command,
-        data: &[u8],
-    ) -> Result<(), HW::Error> {
-        trace!("Sending EPD command: {:?}", command);
-        self.wait_if_busy().await?;
-
-        self.hw.dc().set_low()?;
-        spi.write(&[command.register()]).await?;
-
-        if !data.is_empty() {
-            self.hw.dc().set_high()?;
-            spi.write(data).await?;
+        Epd2In9 {
+            hw,
+            state: StateUninitialized(),
         }
-
-        Ok(())
-    }
-
-    /// Waits for the current operation to complete if the display is busy.
-    ///
-    /// Note that this will wait forever if the display is asleep.
-    async fn wait_if_busy(&mut self) -> Result<(), HW::Error> {
-        let busy = self.hw.busy();
-        // Note: the datasheet states that busy pin is active low, i.e. we should wait for it when
-        // it's low, but this is incorrect. The sample code treats it as active high, which works.
-        if busy.is_high().unwrap() {
-            trace!("Waiting for busy EPD");
-            busy.wait_for_low().await?;
-        }
-        Ok(())
     }
 }
 
-impl<HW> Epd<HW> for Epd2In9<HW>
+impl<HW, STATE> Epd2In9<HW, STATE>
 where
     HW: EpdHw,
+    STATE: StateAwake,
 {
-    type RefreshMode = RefreshMode;
-    type Buffer = BinaryBuffer<
-        { binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)) },
-    >;
-
-    fn new_buffer(&self) -> Self::Buffer {
-        BinaryBuffer::new(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32))
-    }
-
-    fn width(&self) -> u32 {
-        DISPLAY_WIDTH as u32
-    }
-
-    fn height(&self) -> u32 {
-        DISPLAY_HEIGHT as u32
-    }
-
-    async fn init(&mut self, spi: &mut HW::Spi, mode: RefreshMode) -> Result<(), HW::Error> {
-        // Ensure reset is high before toggling it low.
-        self.reset().await?;
+    /// Initialise the display. This should be called before any other operations.
+    pub async fn init(
+        mut self,
+        spi: &mut HW::Spi,
+        mode: RefreshMode,
+    ) -> Result<Epd2In9<HW, StateReady>, HW::Error> {
+        debug!("Initialising display");
+        self = self.reset().await?;
 
         // Reset all configurations to default.
         self.send(spi, Command::SwReset, &[]).await?;
@@ -262,62 +284,64 @@ where
         // 2us per line.
         self.send(spi, Command::SetGateLineWidth, &[0x08]).await?;
 
-        self.send(spi, Command::WriteLut, mode.lut()).await?;
-
-        Ok(())
+        let mut epd = Epd2In9 {
+            hw: self.hw,
+            state: StateReady { mode },
+        };
+        epd.set_refresh_mode_impl(spi, mode).await?;
+        Ok(epd)
     }
 
-    async fn set_refresh_mode(
-        &mut self,
-        spi: &mut <HW as EpdHw>::Spi,
-        mode: Self::RefreshMode,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Changing refresh mode to {:?}", mode);
-        self.send(spi, Command::WriteLut, mode.lut()).await
-    }
-
-    async fn reset(&mut self) -> Result<(), HW::Error> {
-        debug!("Resetting EPD");
-        // Assume reset is already high.
-        self.hw.reset().set_low()?;
-        self.hw.delay().delay_ms(10).await;
-        self.hw.reset().set_high()?;
-        self.hw.delay().delay_ms(10).await;
-        Ok(())
-    }
-
-    async fn sleep(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Sleeping EPD");
-        self.send(spi, Command::DeepSleepMode, &[0x01]).await
-    }
-
-    async fn wake(&mut self, _spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Waking EPD");
-        self.reset().await
-
-        // Confirmed with a physical screen that init is not required after waking.
-    }
-
-    async fn display_buffer(
+    /// Sets the border to the specified colour. You need to call [Epd::update_display] using
+    /// [RefreshMode::Full] afterwards to apply this change.
+    ///
+    /// Note: on my board, the white setting fades to grey fairly quickly. I have not found a way
+    /// to avoid this.
+    pub async fn set_border(
         &mut self,
         spi: &mut HW::Spi,
-        buffer: &Self::Buffer,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Displaying buffer");
-        let buffer_bounds = buffer.bounding_box();
-        self.set_window(spi, buffer_bounds).await?;
-        self.set_cursor(spi, buffer_bounds.top_left).await?;
-        self.write_image(spi, buffer.data()).await?;
+        color: BinaryColor,
+    ) -> Result<(), HW::Error> {
+        let border_setting: u8 = match color {
+            BinaryColor::Off => 0x00,
+            BinaryColor::On => 0x01,
+        };
+        self.send(spi, Command::BorderWaveformControl, &[border_setting])
+            .await
+    }
 
-        self.update_display(spi).await?;
+    /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
+    pub async fn send(
+        &mut self,
+        spi: &mut HW::Spi,
+        command: Command,
+        data: &[u8],
+    ) -> Result<(), HW::Error> {
+        self.hw.send(spi, command.register(), data).await
+    }
+}
 
-        Ok(())
+impl<HW: EpdHw> Epd2In9<HW, StateReady> {
+    /// Sets the refresh mode.
+    pub async fn set_refresh_mode(
+        &mut self,
+        spi: &mut HW::Spi,
+        mode: RefreshMode,
+    ) -> Result<(), HW::Error> {
+        if self.state.mode == mode {
+            Ok(())
+        } else {
+            debug!("Changing refresh mode to {:?}", mode);
+            self.set_refresh_mode_impl(spi, mode).await?;
+            Ok(())
+        }
     }
 
     /// Sets the window to which the next image data will be written.
     ///
-    /// The x-axis only supports multiples of 8; values outside this result in an [Error::InvalidArgument] error.
-    async fn set_window(
+    /// The x-axis only supports multiples of 8; values outside this result in a debug-mode panic,
+    /// or potentially misaligned content when debug assertions are disabled.
+    pub async fn set_window(
         &mut self,
         spi: &mut HW::Spi,
         shape: Rectangle,
@@ -350,8 +374,9 @@ where
 
     /// Sets the cursor position to write the next data to.
     ///
-    /// The x-axis only supports multiples of 8; values outside this will result in [Error::InvalidArgument].
-    async fn set_cursor(
+    /// The x-axis only supports multiples of 8; values outside this will result in a panic in
+    /// debug mode, or potentially misaligned content if debug assertions are disabled.
+    pub async fn set_cursor(
         &mut self,
         spi: &mut HW::Spi,
         position: Point,
@@ -359,6 +384,7 @@ where
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
         debug_assert_eq!(position.x % 8, 0, "position.x must be 8-bit aligned");
+
         self.send(spi, Command::SetRamX, &[(position.x >> 3) as u8])
             .await?;
         let (y_low, y_high) = split_low_and_high(position.y as u16);
@@ -366,6 +392,34 @@ where
         Ok(())
     }
 
+    async fn set_refresh_mode_impl(
+        &mut self,
+        spi: &mut HW::Spi,
+        mode: RefreshMode,
+    ) -> Result<(), HW::Error> {
+        self.send(spi, Command::WriteLut, mode.lut()).await?;
+        self.state.mode = mode;
+
+        // Update bypass if needed.
+        match mode {
+            RefreshMode::Partial => {
+                self.send(spi, Command::DisplayUpdateControl1, &[0x00])
+                    .await
+            }
+            RefreshMode::PartialBlackBypass => {
+                self.send(spi, Command::DisplayUpdateControl1, &[0x90])
+                    .await
+            }
+            RefreshMode::PartialWhiteBypass => {
+                self.send(spi, Command::DisplayUpdateControl1, &[0x80])
+                    .await
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+impl<HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9<HW, StateReady> {
     async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
         // Enable the clock and CP (?), and then display the data from the RAM. Note that there are
         // two RAM buffers, so this will swap the active buffer. Calling this function twice in a row
@@ -377,6 +431,7 @@ where
         // * Sending 0xCD (INITIAL_DISPLAY + PATTERN_DISPLAY) results in seemingly broken, semi-random behaviour.
         // The INIITIAL_DISPLAY settings potentially relate to the "bypass" settings in
         // [Command::DisplayUpdateControl1], but the precise mode is unclear.
+        debug!("Updating display");
 
         self.send(spi, Command::DisplayUpdateControl2, &[0xC4])
             .await?;
@@ -384,20 +439,102 @@ where
         self.send(spi, Command::Noop, &[]).await?;
         Ok(())
     }
+}
 
-    async fn write_image(
+impl<HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9<HW, StateReady> {
+    async fn display_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
-        image: &[u8],
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        self.send(spi, Command::WriteRam, image).await
+        buf: &dyn BufferView<1, 1>,
+    ) -> Result<(), HW::Error> {
+        self.write_framebuffer(spi, buf).await?;
+
+        self.update_display(spi).await
+    }
+
+    async fn write_framebuffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buf: &dyn BufferView<1, 1>,
+    ) -> Result<(), HW::Error> {
+        let buffer_bounds = buf.window();
+        self.set_window(spi, buffer_bounds).await?;
+        self.set_cursor(spi, buffer_bounds.top_left).await?;
+        self.send(spi, Command::WriteRam, buf.data()[0]).await
     }
 }
 
-#[inline(always)]
-/// Splits a 16-bit value into the two 8-bit values representing the low and high bytes.
-fn split_low_and_high(value: u16) -> (u8, u8) {
-    let low = (value & 0xFF) as u8;
-    let high = ((value >> 8) & 0xFF) as u8;
-    (low, high)
+impl<HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9<HW, StateReady> {
+    /// Writes buffer data into the old internal framebuffer. This can be useful either:
+    ///
+    /// * to prep the next frame before the current one has been displayed (since the old buffer
+    ///   becomes the current buffer after the next call to [Self::update_display()]).
+    /// * to modify the "diff base" if in [RefreshMode::Partial]. Also see [Command::DisplayUpdateControl1].
+    async fn write_base_framebuffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buf: &dyn BufferView<1, 1>,
+    ) -> Result<(), <HW as EpdHw>::Error> {
+        let buffer_bounds = buf.window();
+        self.set_window(spi, buffer_bounds).await?;
+        self.set_cursor(spi, buffer_bounds.top_left).await?;
+        self.send(spi, Command::WriteOldRam, buf.data()[0]).await
+    }
+}
+
+async fn reset_impl<HW: EpdHw>(hw: &mut HW) -> Result<(), HW::Error> {
+    debug!("Resetting EPD");
+    // Assume reset is already high.
+    hw.reset().set_low()?;
+    hw.delay().delay_ms(10).await;
+    hw.reset().set_high()?;
+    hw.delay().delay_ms(10).await;
+    Ok(())
+}
+
+impl<HW: EpdHw, STATE: StateAwake> Reset<HW::Error> for Epd2In9<HW, STATE> {
+    type DisplayOut = Epd2In9<HW, STATE>;
+
+    async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
+        reset_impl(&mut self.hw).await?;
+        Ok(self)
+    }
+}
+
+impl<HW: EpdHw, W: StateAwake> Reset<HW::Error> for Epd2In9<HW, StateAsleep<W>> {
+    type DisplayOut = Epd2In9<HW, W>;
+
+    async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
+        reset_impl(&mut self.hw).await?;
+        Ok(Epd2In9 {
+            hw: self.hw,
+            state: self.state.wake_state,
+        })
+    }
+}
+
+impl<HW: EpdHw, STATE: StateAwake> Sleep<HW::Spi, HW::Error> for Epd2In9<HW, STATE> {
+    type DisplayOut = Epd2In9<HW, StateAsleep<STATE>>;
+
+    async fn sleep(mut self, spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
+        debug!("Sleeping EPD");
+        self.send(spi, Command::DeepSleepMode, &[0x01]).await?;
+        Ok(Epd2In9 {
+            hw: self.hw,
+            state: StateAsleep {
+                wake_state: self.state,
+            },
+        })
+    }
+}
+
+impl<HW: EpdHw, W: StateAwake> Wake<HW::Spi, HW::Error> for Epd2In9<HW, StateAsleep<W>> {
+    type DisplayOut = Epd2In9<HW, W>;
+
+    async fn wake(self, _spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
+        debug!("Waking EPD");
+        self.reset().await
+
+        // Confirmed with a physical screen that init is not required after waking.
+    }
 }

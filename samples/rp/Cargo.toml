@@ -8,22 +8,22 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-embassy-embedded-hal = { version = "0.3.0", features = ["defmt"] }
-embassy-executor = { version = "0.7.0", features = ["arch-cortex-m", "executor-thread", "executor-interrupt"] }
-embassy-rp = { version = "0.4.0", features = ["chrono", "defmt", "unstable-pac", "time-driver", "critical-section-impl", "boot2-w25q080", "rp2040", "rom-v2-intrinsics"] }
+embassy-embedded-hal = { version = "0.3", features = ["defmt"] }
+embassy-executor = { version = "0.7", features = ["arch-cortex-m", "executor-thread", "executor-interrupt"] }
+embassy-rp = { workspace = true, features = ["chrono", "defmt", "unstable-pac", "time-driver", "critical-section-impl", "boot2-w25q080", "rp2040", "rom-v2-intrinsics"] }
 
-defmt-rtt = "1.0.0"
+defmt-rtt = "1.0"
 
-cortex-m = { version = "0.7.6", features = ["inline-asm"] }
-cortex-m-rt = "0.7.0"
+cortex-m = { version = "0.7", features = ["inline-asm"] }
+cortex-m-rt = "0.7"
 critical-section = "1.1"
-panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+panic-probe = { version = "1.0", features = ["print-defmt"] }
 
 defmt.workspace = true
 embedded-graphics.workspace = true
 embedded-hal-async.workspace = true
 epd-waveshare-async = { path = "../../epd-waveshare-async", features = ["defmt"] }
-embassy-time = { version = "0.4.0", features = ["defmt", "defmt-timestamp-uptime-s"] }
-thiserror = { version = "2.0.12", default-features = false }
-assign-resources = "0.4.1"
-embassy-sync = "0.6.2"
+embassy-time.workspace = true
+thiserror = { workspace = true, default-features = false }
+assign-resources = "0.5"
+embassy-sync.workspace = true
