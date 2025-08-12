@@ -5,6 +5,7 @@ authors.workspace = true
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 embassy-embedded-hal = { version = "0.3", features = ["defmt"] }
