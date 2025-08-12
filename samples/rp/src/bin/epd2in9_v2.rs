@@ -176,7 +176,7 @@ async fn main(_spawner: Spawner) {
     info!("Displaying with inverse");
     // This re-displays the check pattern, which has been swapped back to the main buffer, but now it shows it inverted.
     expect!(
-        epd.set_bypass(&mut spi, Bypass::BypassInverted, Bypass::Normal)
+        epd.set_ram_bypass(&mut spi, Bypass::Inverted, Bypass::Normal)
             .await,
         "Failed to set bypass"
     );
@@ -197,7 +197,7 @@ async fn main(_spawner: Spawner) {
     info!("Displaying text");
     // Read the base as inverted to get a proper diff, since we displayed it inverted last time when it was the main framebuffer.
     expect!(
-        epd.set_bypass(&mut spi, Bypass::Normal, Bypass::BypassInverted)
+        epd.set_ram_bypass(&mut spi, Bypass::Normal, Bypass::Inverted)
             .await,
         "Failed to reset bypass"
     );
@@ -216,14 +216,14 @@ async fn main(_spawner: Spawner) {
     );
     // Reset the bypasses now the base is normal again.
     expect!(
-        epd.set_bypass(&mut spi, Bypass::Normal, Bypass::Normal)
+        epd.set_ram_bypass(&mut spi, Bypass::Normal, Bypass::Normal)
             .await,
         "Failed to reset bypass"
     );
     Timer::after_secs(3).await;
 
     info!("Displaying black");
-    epd.set_bypass(&mut spi, Bypass::BypassAllZero, Bypass::Normal)
+    epd.set_ram_bypass(&mut spi, Bypass::AllZero, Bypass::Normal)
         .await
         .unwrap();
     epd.update_display(&mut spi).await.unwrap();
@@ -241,7 +241,7 @@ async fn main(_spawner: Spawner) {
     text.draw(&mut buffer).unwrap();
     // Read the base as all black when doing the diff.
     expect!(
-        epd.set_bypass(&mut spi, Bypass::Normal, Bypass::BypassAllZero)
+        epd.set_ram_bypass(&mut spi, Bypass::Normal, Bypass::AllZero)
             .await,
         "Failed to reset bypass"
     );
@@ -249,7 +249,7 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(2).await;
     // Reset the bypasses now the base is normal again.
     expect!(
-        epd.set_bypass(&mut spi, Bypass::Normal, Bypass::Normal)
+        epd.set_ram_bypass(&mut spi, Bypass::Normal, Bypass::Normal)
             .await,
         "Failed to reset bypass"
     );
@@ -281,12 +281,12 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(5).await;
 
     info!("Inverting grayscale image");
-    epd.set_bypass(&mut spi, Bypass::BypassInverted, Bypass::BypassInverted)
+    epd.set_ram_bypass(&mut spi, Bypass::Inverted, Bypass::Inverted)
         .await
         .unwrap();
     epd.update_display(&mut spi).await.unwrap();
     Timer::after_secs(5).await;
-    epd.set_bypass(&mut spi, Bypass::Normal, Bypass::Normal)
+    epd.set_ram_bypass(&mut spi, Bypass::Normal, Bypass::Normal)
         .await
         .unwrap();
 

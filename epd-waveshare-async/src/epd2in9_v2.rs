@@ -156,6 +156,11 @@ impl RefreshMode {
             _ => &[0xC7],
         }
     }
+
+    /// If this refresh mode is black and white only.
+    pub fn is_black_and_white(&self) -> bool {
+        *self != RefreshMode::Gray2
+    }
 }
 
 /// The height of the display (portrait orientation).
@@ -319,9 +324,11 @@ const DRIVER_OUTPUT_INIT_DATA: [u8; 3] = [0x27, 0x01, 0x00];
 /// * [datasheet](https://files.waveshare.com/upload/7/79/2.9inch-e-paper-v2-specification.pdf)
 /// * [sample code](https://github.com/waveshareteam/e-Paper/blob/master/RaspberryPi_JetsonNano/python/lib/waveshare_epd/epd2in9_V2.py)
 ///
-/// The display has a portrait orientation. This uses [BinaryColor], where `Off` is black and `On` is white.
+/// The display has a portrait orientation. This display supports either
+/// [embedded_graphics::pixelcolor::BinaryColor] or [embedded_graphics::pixelcolor::Gray2],
+/// depending on the display mode.
 ///
-/// 4-color greyscale is not yet supported.
+/// When using `BinaryColor`, `Off` is black and `On` is white.
 pub struct Epd2In9V2<HW, STATE>
 where
     HW: EpdHw,
@@ -381,9 +388,9 @@ pub enum Bypass {
     /// Remove any RAM bypass setting.
     Normal = 0,
     /// Reads all zeros as the base for the partial diff.
-    BypassAllZero = 0b100,
+    AllZero = 0b100,
     /// Reads the base of the partial diff as if it's inverted.
-    BypassInverted = 0b1000,
+    Inverted = 0b1000,
 }
 
 impl<HW, STATE> Epd2In9V2<HW, STATE>
@@ -391,6 +398,7 @@ where
     HW: EpdHw,
     STATE: StateAwake,
 {
+    /// Initialises the display.
     pub async fn init(
         mut self,
         spi: &mut HW::Spi,
@@ -449,11 +457,16 @@ impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
         self.send(spi, Command::DataEntryModeSetting, &[0b11])
             .await?;
 
-        match mode {
-            RefreshMode::Gray2 => self.send(spi, Command::DisplayUpdateControl1, &[0x00, 0x00]),
-            // Black and white mode.
-            _ => self.send(spi, Command::DisplayUpdateControl1, &[0x00, 0x80]),
-        }
+        let black_and_white_byte = if mode.is_black_and_white() {
+            0x80
+        } else {
+            0x00
+        };
+        self.send(
+            spi,
+            Command::DisplayUpdateControl1,
+            &[0x00, black_and_white_byte],
+        )
         .await?;
 
         self.send(spi, Command::SetBorderWaveform, mode.border_waveform())
@@ -487,16 +500,31 @@ impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
         Ok(())
     }
 
-    pub async fn set_bypass(
+    /// Sets the "ram bypass", which modifies what the display reads when it tries to access the
+    /// framebuffers.
+    ///
+    /// If in black and white mode, `low_bypass` corresponds with the main framebuffer, and
+    /// `high_bypass` with the diff base.
+    ///
+    /// In Gray2 mode, they represent the low and high bits.
+    pub async fn set_ram_bypass(
         &mut self,
         spi: &mut HW::Spi,
         low_bypass: Bypass,
         high_bypass: Bypass,
     ) -> Result<(), HW::Error> {
+        let black_and_white_byte = if self.state.mode.is_black_and_white() {
+            0x80
+        } else {
+            0x00
+        };
         self.send(
             spi,
             Command::DisplayUpdateControl1,
-            &[((high_bypass as u8) << 4) | (low_bypass as u8), 0x80],
+            &[
+                ((high_bypass as u8) << 4) | (low_bypass as u8),
+                black_and_white_byte,
+            ],
         )
         .await
     }
