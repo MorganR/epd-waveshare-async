@@ -40,6 +40,7 @@ pub mod buffer;
 pub mod epd2in9;
 pub mod epd2in9_v2;
 pub mod epd7in5_v2;
+
 mod hw;
 mod log;
 

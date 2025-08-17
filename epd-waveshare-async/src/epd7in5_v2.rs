@@ -1,5 +1,4 @@
 use crate::buffer::BufferView;
-use crate::epd7in5_v2::RefreshMode::Partial;
 use crate::hw::EPDPowerHw;
 use crate::log::trace;
 use crate::{
@@ -440,7 +439,8 @@ where
         Ok(epd)
     }
 
-    /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
+    /// Send the following command and data to the display.
+    /// Waits until the display is no longer busy before sending.
     pub async fn send(
         &mut self,
         spi: &mut HW::Spi,
@@ -659,10 +659,6 @@ impl<HW: EpdHw, PHW: EPDPowerHw> DisplayPartialArea<1, 1, HW::Spi, HW::Error>
         buf: &dyn BufferView<1, 1>,
         area: Rectangle,
     ) -> Result<(), HW::Error> {
-        if self.state.mode != Partial {
-            todo!("Figure out how to throw an actual error here");
-        }
-
         self.hw.wait_if_busy().await?;
 
         self.state.data_settings = DataFlags::EnableBorderHiZ

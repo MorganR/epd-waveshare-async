@@ -268,7 +268,7 @@ async fn main(_spawner: Spawner) {
     style.alignment = Alignment::Left;
     style.baseline = Baseline::Top;
     let character_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::Off);
-    let mut text = Text::with_text_style(
+    let text = Text::with_text_style(
         "Playing with contrast",
         Point::new(0, 149),
         character_style,
@@ -278,24 +278,7 @@ async fn main(_spawner: Spawner) {
     expect!(
         epd.display_partial_framebuffer(&mut spi, &buffer, text.bounding_box())
             .await,
-        "Failed to display black half of text"
-    );
-
-    // Draw white text over only the black part of the check.
-    buffer.clear(BinaryColor::Off).unwrap();
-    text.character_style.text_color = Some(BinaryColor::On);
-    text.draw(&mut buffer).unwrap();
-    let buffer_bounds = buffer.bounding_box();
-    let half_width = buffer_bounds.size.width / 2;
-    let top_middle = buffer_bounds.top_left + Point::new(half_width as i32, 0);
-    let right_half = Rectangle::new(top_middle, Size::new(half_width, buffer_bounds.size.height));
-    // Cover the right-side of the text.
-    buffer.fill_solid(&right_half, BinaryColor::Off).unwrap();
-    // Just display white pixels (i.e. same as before plus left side of text).
-    expect!(
-        epd.display_partial_framebuffer(&mut spi, &buffer, text.bounding_box())
-            .await,
-        "Failed to display white half of text"
+        "Failed to display text"
     );
 
     info!("Sleeping EPD");

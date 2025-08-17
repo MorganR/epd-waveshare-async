@@ -1,11 +1,12 @@
 use core::error::Error as CoreError;
 
-use crate::log::trace;
 use embedded_hal::{
     digital::{ErrorType as PinErrorType, InputPin, OutputPin},
     spi::ErrorType as SpiErrorType,
 };
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
+
+use crate::log::trace;
 
 /// Provides access to the hardware needed to control an EPD.
 ///
