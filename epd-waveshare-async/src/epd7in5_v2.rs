@@ -1,3 +1,8 @@
+use crate::{
+    buffer::{binary_buffer_length, BinaryBuffer},
+    log::{debug, trace},
+    Epd, EpdHw,
+};
 use bitflags::bitflags;
 use core::error::Error as CoreError;
 use core::time::Duration;
@@ -13,12 +18,6 @@ use embedded_hal::{
 };
 use embedded_hal_async::spi::ErrorType as SpiErrorType;
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
-
-use crate::{
-    buffer::{binary_buffer_length, BinaryBuffer},
-    log::{debug, trace},
-    Epd, EpdHw,
-};
 
 pub trait Epd7in5v2Hw: EpdHw {
     type Power: OutputPin;
@@ -140,6 +139,8 @@ pub enum Command {
     /// This command indicates the input power condition. Host can read this flag to learn
     /// the battery condition.
     LowPowerDetection = 0x51,
+
+    SetEndVoltage = 0x52,
 
     /// This command defines non-overlap period of Gate and Source.
     TconSetting = 0x60,
@@ -339,7 +340,7 @@ where
     }
 
     async fn init_fast(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Initialising display for partial updates");
+        debug!("Initialising display for fast updates");
         self.reset().await?;
 
         self.wait_if_busy(spi).await?;
@@ -389,37 +390,37 @@ where
         mode: RefreshMode,
     ) -> Result<(), <HW as EpdHw>::Error> {
         debug!("Initialising display");
-        self.reset().await?;
-
-        self.wait_if_busy(spi).await?;
-        // Reset all configurations to default.
-        self.send(spi, Command::BoosterSoftStart, &[0x17, 0x17, 0x28, 0x17])
-            .await?;
-        self.send(spi, Command::PowerSetting, &[0x07, 0x07, 0x3F, 0x3F])
-            .await?;
-        self.send(spi, Command::PowerOn, &[]).await?;
-        self.hw.delay().delay_ms(100).await;
-        self.wait_if_busy(spi).await?;
-        self.send(spi, Command::PanelSetting, &[0x1f]).await?;
-        self.send(spi, Command::PllControl, &[0x06]).await?;
-        self.send(spi, Command::TconResolution, &[0x03, 0x20, 0x01, 0xe0])
-            .await?;
-        self.send(spi, Command::DualSpi, &[0x00]).await?;
-        self.data_settings = DataFlags::BorderWhite;
-        self.send(
-            spi,
-            Command::VcomAndDataIntervalSetting,
-            &[self.data_settings.bits(), VCOM_INTERVAL_10],
-        )
-        .await?;
-        self.send(spi, Command::TconSetting, &[0x22]).await?;
-        self.wait_if_busy(spi).await?;
-
         match mode {
             RefreshMode::Partial => self.init_part(spi).await?,
             RefreshMode::Fast => self.init_fast(spi).await?,
-            _ => {
-                // Other modes need no special initialization
+            RefreshMode::Full => {
+                self.reset().await?;
+
+                self.wait_if_busy(spi).await?;
+                self.send(spi, Command::PowerOn, &[]).await?;
+                self.hw.delay().delay_ms(100).await;
+                self.wait_if_busy(spi).await?;
+
+                // Reset all configurations to default.
+                self.send(spi, Command::BoosterSoftStart, &[0x17, 0x17, 0x28, 0x17])
+                    .await?;
+                self.send(spi, Command::PowerSetting, &[0x07, 0x07, 0x3a, 0x3a, 0x3])
+                    .await?;
+                self.send(spi, Command::PanelSetting, &[0x1f]).await?;
+                self.send(spi, Command::PllControl, &[0x06]).await?;
+                self.send(spi, Command::TconResolution, &[0x03, 0x20, 0x01, 0xe0])
+                    .await?;
+                self.send(spi, Command::DualSpi, &[0x00]).await?;
+                self.data_settings = DataFlags::BorderWhite | DataFlags::PosPol;
+                self.send(
+                    spi,
+                    Command::VcomAndDataIntervalSetting,
+                    &[self.data_settings.bits(), VCOM_INTERVAL_10],
+                )
+                .await?;
+                self.send(spi, Command::TconSetting, &[0x22]).await?;
+
+                self.wait_if_busy(spi).await?;
             }
         }
         Ok(())
@@ -473,7 +474,7 @@ where
         buffer: &Self::Buffer,
     ) -> Result<(), <HW as EpdHw>::Error> {
         self.wait_if_busy(spi).await?;
-        self.write_old_framebuffer(spi, &buffer).await?;
+        self.write_old_framebuffer(spi, buffer).await?;
         self.write_framebuffer(spi, buffer).await?;
         self.update_display(spi).await?;
         self.wait_if_busy(spi).await?;

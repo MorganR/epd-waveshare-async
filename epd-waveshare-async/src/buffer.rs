@@ -590,7 +590,7 @@ mod tests {
         // Draw diagonal squares.
         buffer
             .fill_solid(
-                // Fill a rectangle of width 18
+                // Fill a rectangle with a width of 18
                 &Rectangle::new(Point::new(6, 2), Size::new(18, 3)),
                 BinaryColor::On,
             )

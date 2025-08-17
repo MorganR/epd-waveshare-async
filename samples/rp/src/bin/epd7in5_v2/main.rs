@@ -73,7 +73,20 @@ async fn main(_spawner: Spawner) {
     buffer
         .fill_solid(&buffer.bounding_box(), BinaryColor::Off)
         .unwrap();
-    info!("Displaying white buffer");
+
+    let rect = Rectangle::new(Point::new(200, 0), Size::new(400, 80));
+    buffer.fill_solid(&rect, BinaryColor::On).unwrap();
+
+    let rect = Rectangle::new(Point::new(200, 100), Size::new(400, 80));
+    buffer.fill_solid(&rect, BinaryColor::On).unwrap();
+
+    let rect = Rectangle::new(Point::new(200, 200), Size::new(400, 80));
+    buffer.fill_solid(&rect, BinaryColor::On).unwrap();
+
+    let rect = Rectangle::new(Point::new(200, 300), Size::new(400, 80));
+    buffer.fill_solid(&rect, BinaryColor::On).unwrap();
+
+    info!("Displaying four horizontal blocks");
     expect!(
         epd.display_buffer(&mut spi, &buffer).await,
         "Failed to display buffer"
@@ -299,7 +312,7 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(5).await;
 
     // Set old framebuffer to different color to force full-screen update
-    // Otherwise the screen performs nu update
+    // Otherwise the screen performs no update
     buffer.clear(BinaryColor::On).unwrap();
     epd.write_old_framebuffer(&mut spi, &buffer).await.unwrap();
     buffer.clear(BinaryColor::Off).unwrap();
@@ -326,9 +339,6 @@ async fn main(_spawner: Spawner) {
     );
     Timer::after_secs(3).await;
 
-    expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
-
-    Timer::after_secs(3).await;
     info!("Clearing screen for the final time");
     epd.init(&mut spi, RefreshMode::Full).await.unwrap();
     buffer
