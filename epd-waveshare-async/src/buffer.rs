@@ -199,8 +199,10 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
         let x_start = drawable_area.top_left.x;
         let x_end = drawable_area.top_left.x + drawable_area.size.width as i32;
 
-        let x_full_bytes_start = min(x_start + x_start % 8, x_end);
-        let x_full_bytes_end = max(x_end - (x_end % 8), x_start);
+        // Full bytes start at next multiple of 8 from x_start (inclusive if x_start is multiple)
+        let x_full_bytes_start = min(((x_start + 7) / 8) * 8, x_end);
+        // Full bytes end at last multiple of 8 before x_end (inclusive if x_end is multiple)
+        let x_full_bytes_end = max(x_end / 8 * 8, x_start);
         let num_full_bytes_per_row = (x_full_bytes_end - x_full_bytes_start) / 8;
 
         let mut byte_index = y_start as usize * self.bytes_per_row;
@@ -694,6 +696,37 @@ mod tests {
             0b00000011, 0b11111111, 0b11001111,
             0b00000000, 0b00000000, 0b00001111,
             0b00000000, 0b00000000, 0b00001111,
+        ];
+        assert_eq!(buffer.data(), &expected);
+    }
+
+    // Test for a bug where fill_solid would skip filling bytes on some width settings
+    #[test]
+    fn test_binary_buffer_fill_solid_offset() {
+        // 8 rows, 1 byte each.
+        const SIZE: Size = Size::new(24, 8);
+        const BUFFER_LENGTH: usize = binary_buffer_length(SIZE);
+        let mut buffer = BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE);
+
+        // Draw diagonal squares.
+        buffer
+            .fill_solid(
+                // Fill a rectangle with a width of 18
+                &Rectangle::new(Point::new(6, 2), Size::new(18, 3)),
+                BinaryColor::On,
+            )
+            .unwrap();
+
+        #[rustfmt::skip]
+        let expected: [u8; 3 * 8] = [
+            0b00000000, 0b00000000, 0b00000000,
+            0b00000000, 0b00000000, 0b00000000,
+            0b00000011, 0b11111111, 0b11111111,
+            0b00000011, 0b11111111, 0b11111111,
+            0b00000011, 0b11111111, 0b11111111,
+            0b00000000, 0b00000000, 0b00000000,
+            0b00000000, 0b00000000, 0b00000000,
+            0b00000000, 0b00000000, 0b00000000,
         ];
         assert_eq!(buffer.data(), &expected);
     }

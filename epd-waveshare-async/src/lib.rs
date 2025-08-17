@@ -33,16 +33,19 @@
 #![no_std]
 #![allow(async_fn_in_trait)]
 
+use embedded_graphics::primitives::Rectangle;
 use embedded_hal_async::spi::SpiDevice;
 
 pub mod buffer;
 pub mod epd2in9;
 pub mod epd2in9_v2;
+pub mod epd7in5_v2;
 
 mod hw;
 mod log;
 
 use crate::buffer::BufferView;
+pub use crate::hw::EPDPowerHw;
 pub use crate::hw::EpdHw;
 
 /// Indicates usage errors due to incorrect states.
@@ -64,6 +67,21 @@ pub trait Reset<ERROR> {
 
     /// Hardware resets the display.
     async fn reset(self) -> Result<Self::DisplayOut, ERROR>;
+}
+
+/// Displays that have a hardware power switch.
+
+pub trait PowerOn<ERROR> {
+    type DisplayOut;
+
+    /// Turn on the power to the display
+    async fn power_on(self) -> Result<Self::DisplayOut, ERROR>;
+}
+pub trait PowerOff<ERROR> {
+    type DisplayOut;
+
+    /// Turn off the power to the display
+    async fn power_off(self) -> Result<Self::DisplayOut, ERROR>;
 }
 
 /// Displays that can sleep to save power.
@@ -135,5 +153,21 @@ pub trait DisplayPartial<const BITS: usize, const FRAMES: usize, SPI: SpiDevice,
         &mut self,
         spi: &mut SPI,
         buf: &dyn BufferView<BITS, FRAMES>,
+    ) -> Result<(), ERROR>;
+}
+
+/// Displays that support a partial update, where you can provide a rectangular area and only
+/// write the data for that area to the framebuffer.
+/// Only pixels for the given area are actually updated
+pub trait DisplayPartialArea<const BITS: usize, const FRAMES: usize, SPI: SpiDevice, ERROR>:
+    DisplaySimple<BITS, FRAMES, SPI, ERROR>
+{
+    /// Writes the part of the buffer that covers the given area to the framebuffer of the device.
+    /// Also updates the display, only changing the pixels that cover the given area.
+    async fn display_partial_framebuffer(
+        &mut self,
+        spi: &mut SPI,
+        buf: &dyn BufferView<BITS, FRAMES>,
+        area: Rectangle,
     ) -> Result<(), ERROR>;
 }

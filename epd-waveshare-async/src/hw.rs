@@ -106,6 +106,14 @@ pub trait EpdHw {
     fn delay(&mut self) -> &mut Self::Delay;
 }
 
+pub trait EPDPowerHw {
+    type Power: OutputPin;
+
+    type Error: CoreError + From<<Self::Power as PinErrorType>::Error> + From<crate::Error>;
+
+    fn power(&mut self) -> &mut Self::Power;
+}
+
 /// Provides "wait" support for hardware with a busy state.
 pub(crate) trait BusyWait: EpdHw {
     /// Waits for the current operation to complete if the display is busy.

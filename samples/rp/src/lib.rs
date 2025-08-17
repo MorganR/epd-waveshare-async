@@ -11,7 +11,7 @@ use embassy_rp::spi::{self, Spi};
 use embassy_rp::Peri;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Delay;
-use epd_waveshare_async::{EpdHw, Error as EpdError};
+use epd_waveshare_async::{EPDPowerHw, EpdHw, Error as EpdError};
 use thiserror::Error as ThisError;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -44,6 +44,17 @@ impl<'a, SPI: spi::Instance> DisplayHw<'a, SPI> {
     }
 }
 
+pub struct DisplayPowerHw<'a> {
+    power: Output<'a>,
+}
+
+impl<'a> DisplayPowerHw<'a> {
+    pub fn new<POWER: Pin>(power: Peri<'a, POWER>) -> Self {
+        let power = Output::new(power, Level::Low);
+
+        Self { power }
+    }
+}
 pub type RawSpiError = SpiDeviceError<spi::Error, Infallible>;
 
 type EpdSpiDevice<'a, SPI> = SpiDevice<'a, NoopRawMutex, Spi<'a, SPI, spi::Async>, Output<'a>>;
@@ -75,6 +86,15 @@ impl<'a, SPI: spi::Instance + 'a> EpdHw for DisplayHw<'a, SPI> {
 
     fn delay(&mut self) -> &mut Self::Delay {
         &mut self.delay
+    }
+}
+
+impl<'a> EPDPowerHw for DisplayPowerHw<'a> {
+    type Power = Output<'a>;
+    type Error = Error;
+
+    fn power(&mut self) -> &mut Self::Power {
+        &mut self.power
     }
 }
 
