@@ -1,34 +1,82 @@
+use crate::buffer::BufferView;
+use crate::epd7in5_v2::RefreshMode::Partial;
+use crate::hw::EPDPowerHw;
+use crate::log::trace;
 use crate::{
     buffer::{binary_buffer_length, BinaryBuffer},
-    log::{debug, trace},
-    Epd, EpdHw,
+    log::debug,
+    DisplayPartial, DisplayPartialArea, DisplaySimple, Displayable, EpdHw, PowerOff, PowerOn,
+    Reset, Sleep, Wake,
 };
 use bitflags::bitflags;
-use core::error::Error as CoreError;
 use core::time::Duration;
+#[cfg(feature = "defmt")]
+use defmt;
+use embedded_graphics::geometry::Point;
 use embedded_graphics::pixelcolor::BinaryColor;
-use embedded_graphics::{
-    prelude::{Dimensions, Point, Size},
-    primitives::Rectangle,
-};
-use embedded_hal::digital::ErrorType as PinErrorType;
+use embedded_graphics::prelude::Size;
+use embedded_graphics::primitives::Rectangle;
 use embedded_hal::{
-    digital::{InputPin, OutputPin},
+    digital::InputPin,
+    digital::OutputPin,
     spi::{Phase, Polarity},
 };
-use embedded_hal_async::spi::ErrorType as SpiErrorType;
-use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
+use embedded_hal_async::delay::DelayNs;
+use embedded_hal_async::digital::Wait;
+use embedded_hal_async::spi::SpiDevice;
 
-pub trait Epd7in5v2Hw: EpdHw {
-    type Power: OutputPin;
-    type Error: CoreError
-        + From<<Self::Spi as SpiErrorType>::Error>
-        + From<<Self::Dc as PinErrorType>::Error>
-        + From<<Self::Reset as PinErrorType>::Error>
-        + From<<Self::Busy as PinErrorType>::Error>
-        + From<<Self::Power as PinErrorType>::Error>;
+/// Provides "wait" support for hardware with a busy state.
+pub trait BusyWait: EpdHw {
+    /// Waits for the current operation to complete if the display is busy.
+    ///
+    /// Note that this will wait forever if the display is asleep.
+    async fn wait_if_busy(&mut self) -> Result<(), Self::Error>;
+}
 
-    fn power(&mut self) -> &mut Self::Power;
+/// Provides the ability to send <command> then <data> style communications.
+pub trait CommandDataSend: EpdHw {
+    /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
+    async fn send(
+        &mut self,
+        spi: &mut <Self as EpdHw>::Spi,
+        command: u8,
+        data: &[u8],
+    ) -> Result<(), Self::Error>;
+}
+
+// On this display the busy pin is active low.
+impl<HW: EpdHw> BusyWait for HW {
+    async fn wait_if_busy(&mut self) -> Result<(), HW::Error> {
+        // Note: the datasheet states that busy pin is active low,
+        // i.e. we should wait for it when it's low.
+        if self.busy().is_low()? {
+            trace!("Waiting for busy EPD");
+            self.busy().wait_for_low().await?;
+        }
+        Ok(())
+    }
+}
+
+impl<HW: EpdHw> CommandDataSend for HW {
+    async fn send(
+        &mut self,
+        spi: &mut <Self as EpdHw>::Spi,
+        command: u8,
+        data: &[u8],
+    ) -> Result<(), Self::Error> {
+        trace!("Sending EPD command: {:?}", command);
+        self.wait_if_busy().await?;
+
+        self.dc().set_low()?;
+        spi.write(&[command]).await?;
+
+        if !data.is_empty() {
+            self.dc().set_high()?;
+            spi.write(data).await?;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -185,7 +233,18 @@ impl Command {
     }
 }
 
+/// The length of the underlying buffer used by [Epd7In5V2].
+pub const BINARY_BUFFER_LENGTH: usize =
+    binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32));
+/// The buffer type used by [Epd7In5V2].
+pub type Epd7In5V2BinaryBuffer = BinaryBuffer<BINARY_BUFFER_LENGTH>;
+/// Constructs a new binary buffer for use with the [Epd7In5V2] display.
+pub fn new_binary_buffer() -> Epd7In5V2BinaryBuffer {
+    Epd7In5V2BinaryBuffer::new(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32))
+}
+
 bitflags! {
+    #[derive(Copy, Clone, Debug, PartialEq)]
     pub struct DataFlags: u8 {
         const EnableBorderHiZ = 0b1000_0000;
         // These names make sense for data polarity where 0 means off/white
@@ -211,81 +270,174 @@ const VCOM_INTERVAL_10: u8 = 0x07;
 pub type Epd7In5v2Buffer =
     BinaryBuffer<{ binary_buffer_length(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)) }>;
 
-pub struct Epd7In5v2<HW>
+pub struct Epd7In5v2<HW, PHW, STATE>
 where
     HW: EpdHw,
+    PHW: EPDPowerHw,
+    STATE: State,
 {
     hw: HW,
-    refresh_mode: Option<RefreshMode>,
-    data_settings: DataFlags,
+    power_hw: PHW,
+    state: STATE,
 }
 
-impl<HW> Epd7In5v2<HW>
+trait StateInternal {}
+#[allow(private_bounds)]
+pub trait State: StateInternal {}
+pub trait StateAwake: State {}
+
+macro_rules! impl_base_state {
+    ($state:ident) => {
+        impl StateInternal for $state {}
+        impl State for $state {}
+    };
+}
+
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StatePoweredOff();
+impl_base_state!(StatePoweredOff);
+
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateUninitialized();
+impl_base_state!(StateUninitialized);
+
+impl StateAwake for StateUninitialized {}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateReady {
+    mode: RefreshMode,
+    data_settings: DataFlags,
+}
+impl_base_state!(StateReady);
+impl StateAwake for StateReady {}
+
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateAsleep<W: StateAwake> {
+    wake_state: W,
+}
+impl<W: StateAwake> StateInternal for StateAsleep<W> {}
+impl<W: StateAwake> State for StateAsleep<W> {}
+
+impl<HW, PHW> Epd7In5v2<HW, PHW, StatePoweredOff>
 where
-    HW: Epd7in5v2Hw,
+    HW: EpdHw,
+    PHW: EPDPowerHw,
 {
-    pub fn new(hw: HW) -> Self {
+    pub fn new(hw: HW, power_hw: PHW) -> Self {
         Epd7In5v2 {
             hw,
-            refresh_mode: None,
-            data_settings: DataFlags::BorderWhite,
+            power_hw,
+            state: StatePoweredOff(),
         }
     }
+}
 
-    /// Sets the power pin high for the EPD. Before you can start using the display you must
-    /// call [Epd::init] to properly initialize the display.
-    pub async fn turn_on(&mut self) -> Result<(), <HW as Epd7in5v2Hw>::Error> {
-        self.hw.power().set_high()?;
-        Ok(())
+fn power_on_impl<PHW: EPDPowerHw>(hw: &mut PHW) -> Result<(), PHW::Error> {
+    debug!("Turning on power to EPD");
+    hw.power().set_high()?;
+    Ok(())
+}
+
+fn power_off_impl<PHW: EPDPowerHw>(hw: &mut PHW) -> Result<(), PHW::Error> {
+    debug!("Turning off power to EPD");
+    hw.power().set_low()?;
+    Ok(())
+}
+
+impl<HW: EpdHw, PHW: EPDPowerHw> PowerOn<PHW::Error> for Epd7In5v2<HW, PHW, StatePoweredOff> {
+    type DisplayOut = Epd7In5v2<HW, PHW, StateUninitialized>;
+
+    async fn power_on(mut self) -> Result<Self::DisplayOut, PHW::Error> {
+        power_on_impl(&mut self.power_hw)?;
+        Ok(Epd7In5v2 {
+            hw: self.hw,
+            power_hw: self.power_hw,
+            state: StateUninitialized(),
+        })
     }
+}
 
-    /// Sets the power pin low for the EPD. This is the end of the shutdown cycle of the display,
-    /// which starts by calling [Epd::sleep].
-    pub async fn turn_off(&mut self) -> Result<(), <HW as Epd7in5v2Hw>::Error> {
-        self.hw.power().set_low()?;
-        Ok(())
+impl<HW: EpdHw, PHW: EPDPowerHw, W: State> PowerOff<PHW::Error>
+    for Epd7In5v2<HW, PHW, StateAsleep<W>>
+where
+    W: StateAwake,
+{
+    type DisplayOut = Epd7In5v2<HW, PHW, StatePoweredOff>;
+
+    async fn power_off(mut self) -> Result<Self::DisplayOut, PHW::Error> {
+        power_off_impl(&mut self.power_hw)?;
+        Ok(Epd7In5v2 {
+            hw: self.hw,
+            power_hw: self.power_hw,
+            state: StatePoweredOff(),
+        })
     }
+}
 
-    /// Sets the border to the specified colour. You need to call [Epd::update_display] using
-    /// [RefreshMode::Full] afterward to apply this change.
-    ///
-    /// Note: on my board, the white setting fades to grey fairly quickly. I have not found a way
-    /// to avoid this.
-    pub async fn set_border(
-        &mut self,
+async fn reset_impl<HW: EpdHw>(hw: &mut HW) -> Result<(), HW::Error> {
+    debug!("Resetting EPD");
+    hw.reset().set_high()?;
+    hw.delay().delay_ms(10).await;
+    hw.reset().set_low()?;
+    hw.delay().delay_ms(2).await;
+    hw.reset().set_high()?;
+    hw.delay().delay_ms(200).await;
+    Ok(())
+}
+
+impl<HW: EpdHw, PHW: EPDPowerHw, STATE: StateAwake> Reset<HW::Error> for Epd7In5v2<HW, PHW, STATE> {
+    type DisplayOut = Epd7In5v2<HW, PHW, STATE>;
+
+    async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
+        reset_impl(&mut self.hw).await?;
+        Ok(self)
+    }
+}
+
+impl<HW: EpdHw, PHW: EPDPowerHw, W: StateAwake> Reset<HW::Error>
+    for Epd7In5v2<HW, PHW, StateAsleep<W>>
+{
+    type DisplayOut = Epd7In5v2<HW, PHW, W>;
+
+    async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
+        reset_impl(&mut self.hw).await?;
+        Ok(Epd7In5v2 {
+            hw: self.hw,
+            power_hw: self.power_hw,
+            state: self.state.wake_state,
+        })
+    }
+}
+
+impl<HW, PHW, STATE> Epd7In5v2<HW, PHW, STATE>
+where
+    HW: EpdHw,
+    PHW: EPDPowerHw,
+    STATE: StateAwake,
+{
+    /// Initialises the display.
+    pub async fn init(
+        mut self,
         spi: &mut HW::Spi,
-        color: BinaryColor,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        match color {
-            BinaryColor::Off => {
-                self.data_settings &= !DataFlags::BorderBlack;
-                self.data_settings |= DataFlags::BorderWhite;
-            }
-            BinaryColor::On => {
-                self.data_settings &= !DataFlags::BorderWhite;
-                self.data_settings |= DataFlags::BorderBlack;
-            }
+        mode: RefreshMode,
+    ) -> Result<Epd7In5v2<HW, PHW, StateReady>, HW::Error> {
+        debug!("Initialising display");
+        self = self.reset().await?;
+
+        let epd = Epd7In5v2 {
+            hw: self.hw,
+            power_hw: self.power_hw,
+            state: StateReady {
+                mode,
+                data_settings: DataFlags::empty(),
+            },
         };
-        self.send(
-            spi,
-            Command::VcomAndDataIntervalSetting,
-            &[self.data_settings.bits(), VCOM_INTERVAL_10],
-        )
-        .await
-    }
 
-    /// Writes buffer data into the old internal framebuffer. This can be useful either:
-    ///
-    /// * to prep the next frame before the current one has been displayed (since the old buffer
-    ///   becomes the current buffer after the next call to [Self::update_display()]).
-    /// * to modify the "diff" that is displayed if in [RefreshMode::Partial]. Also see [Command::DisplayUpdateControl1].
-    pub async fn write_old_framebuffer(
-        &mut self,
-        spi: &mut HW::Spi,
-        buffer: &Epd7In5v2Buffer,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        self.send(spi, Command::DataStartTransmission1, buffer.data())
-            .await
+        let epd = epd.set_refresh_mode_impl(spi, mode).await?;
+        Ok(epd)
     }
 
     /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
@@ -294,44 +446,76 @@ where
         spi: &mut HW::Spi,
         command: Command,
         data: &[u8],
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        trace!("Sending EPD command: {:?}", command);
+    ) -> Result<(), HW::Error> {
+        self.hw.send(spi, command.register(), data).await
+    }
+}
 
-        // Low for command
-        self.hw.dc().set_low()?;
-        spi.write(&[command.register()]).await?;
-
-        if !data.is_empty() {
-            // High for data
-            self.hw.dc().set_high()?;
-            spi.write(data).await?;
+impl<HW: EpdHw, PHW: EPDPowerHw> Epd7In5v2<HW, PHW, StateReady> {
+    /// Sets the refresh mode.
+    pub async fn set_refresh_mode(
+        self,
+        spi: &mut HW::Spi,
+        mode: RefreshMode,
+    ) -> Result<Epd7In5v2<HW, PHW, StateReady>, HW::Error> {
+        if self.state.mode == mode {
+            Ok(self)
+        } else {
+            debug!("Changing refresh mode to {:?}", mode);
+            let epd = self.set_refresh_mode_impl(spi, mode).await?;
+            Ok(epd)
         }
+    }
+
+    async fn set_refresh_mode_impl(
+        self,
+        spi: &mut <HW as EpdHw>::Spi,
+        mode: RefreshMode,
+    ) -> Result<Epd7In5v2<HW, PHW, StateReady>, HW::Error> {
+        let mut epd = self.reset().await?;
+        match mode {
+            RefreshMode::Partial => epd.init_part(spi).await?,
+            RefreshMode::Fast => epd.init_fast(spi).await?,
+            RefreshMode::Full => epd.init_full(spi).await?,
+        }
+        epd.state.mode = mode;
+        Ok(epd)
+    }
+
+    async fn init_full(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+        debug!("Initialising display for full updates");
+        self.send(spi, Command::PowerOn, &[]).await?;
+        self.hw.delay().delay_ms(100).await;
+        self.hw.wait_if_busy().await?;
+
+        // Reset all configurations to default.
+        self.send(spi, Command::BoosterSoftStart, &[0x17, 0x17, 0x28, 0x17])
+            .await?;
+        self.send(spi, Command::PowerSetting, &[0x07, 0x07, 0x3a, 0x3a, 0x3])
+            .await?;
+        self.send(spi, Command::PanelSetting, &[0x1f]).await?;
+        self.send(spi, Command::PllControl, &[0x06]).await?;
+        self.send(spi, Command::TconResolution, &[0x03, 0x20, 0x01, 0xe0])
+            .await?;
+        self.send(spi, Command::DualSpi, &[0x00]).await?;
+        self.state.data_settings = DataFlags::BorderWhite | DataFlags::PosPol;
+        self.send(
+            spi,
+            Command::VcomAndDataIntervalSetting,
+            &[self.state.data_settings.bits(), VCOM_INTERVAL_10],
+        )
+        .await?;
+        self.send(spi, Command::TconSetting, &[0x22]).await?;
+
+        self.hw.wait_if_busy().await?;
 
         Ok(())
     }
-
-    /// Waits for the current operation to complete if the display is busy.
-    ///
-    /// Note that this will wait forever if the display is asleep.
-    async fn wait_if_busy(&mut self, _spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
-        // Note: the datasheet states that busy pin is active low, i.e. we should wait for it when
-        // it's low.
-        if self.hw.busy().is_low()? {
-            trace!("Waiting for busy EPD");
-            self.hw.busy().wait_for_low().await?;
-        }
-        Ok(())
-    }
-
     async fn init_part(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
         debug!("Initialising display for partial updates");
-        self.reset().await?;
-
-        self.wait_if_busy(spi).await?;
         self.send(spi, Command::PanelSetting, &[0x1f]).await?;
         self.send(spi, Command::PowerOn, &[]).await?;
         self.hw.delay().delay_ms(100).await;
-        self.wait_if_busy(spi).await?;
 
         self.send(spi, Command::CascadeSetting, &[0x02]).await?;
         self.send(spi, Command::ForceTemperature, &[0x6e]).await?;
@@ -341,20 +525,17 @@ where
 
     async fn init_fast(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
         debug!("Initialising display for fast updates");
-        self.reset().await?;
 
-        self.wait_if_busy(spi).await?;
         self.send(spi, Command::PanelSetting, &[0x1f]).await?;
-        self.data_settings = DataFlags::BorderWhite;
+        self.state.data_settings = DataFlags::BorderWhite;
         self.send(
             spi,
             Command::VcomAndDataIntervalSetting,
-            &[self.data_settings.bits(), VCOM_INTERVAL_10],
+            &[self.state.data_settings.bits(), VCOM_INTERVAL_10],
         )
         .await?;
         self.send(spi, Command::PowerOn, &[]).await?;
         self.hw.delay().delay_ms(100).await;
-        self.wait_if_busy(spi).await?;
 
         self.send(spi, Command::BoosterSoftStart, &[0x27, 0x27, 0x18, 0x17])
             .await?;
@@ -364,139 +545,134 @@ where
 
         Ok(())
     }
+
+    /// Sets the border to the specified colour. You need to subsequently call [Epd::update_display] using
+    /// [RefreshMode::Full] to apply this change.
+    pub async fn set_border(
+        &mut self,
+        spi: &mut HW::Spi,
+        color: BinaryColor,
+    ) -> Result<(), HW::Error> {
+        match color {
+            BinaryColor::Off => {
+                self.state.data_settings &= !DataFlags::BorderBlack;
+                self.state.data_settings |= DataFlags::BorderWhite;
+            }
+            BinaryColor::On => {
+                self.state.data_settings &= !DataFlags::BorderWhite;
+                self.state.data_settings |= DataFlags::BorderBlack;
+            }
+        };
+        self.send(
+            spi,
+            Command::VcomAndDataIntervalSetting,
+            &[self.state.data_settings.bits(), VCOM_INTERVAL_10],
+        )
+        .await
+    }
 }
 
-impl<HW> Epd<HW> for Epd7In5v2<HW>
-where
-    HW: Epd7in5v2Hw,
+impl<HW: EpdHw, PHW: EPDPowerHw, STATE: StateAwake> Sleep<HW::Spi, HW::Error>
+    for Epd7In5v2<HW, PHW, STATE>
 {
-    type RefreshMode = RefreshMode;
-    type Buffer = Epd7In5v2Buffer;
+    type DisplayOut = Epd7In5v2<HW, PHW, StateAsleep<STATE>>;
 
-    fn new_buffer(&self) -> Self::Buffer {
-        BinaryBuffer::new(Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32))
-    }
-
-    fn width(&self) -> u32 {
-        DISPLAY_WIDTH as u32
-    }
-
-    fn height(&self) -> u32 {
-        DISPLAY_HEIGHT as u32
-    }
-    async fn init(
-        &mut self,
-        spi: &mut HW::Spi,
-        mode: RefreshMode,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Initialising display");
-        match mode {
-            RefreshMode::Partial => self.init_part(spi).await?,
-            RefreshMode::Fast => self.init_fast(spi).await?,
-            RefreshMode::Full => {
-                self.reset().await?;
-
-                self.wait_if_busy(spi).await?;
-                self.send(spi, Command::PowerOn, &[]).await?;
-                self.hw.delay().delay_ms(100).await;
-                self.wait_if_busy(spi).await?;
-
-                // Reset all configurations to default.
-                self.send(spi, Command::BoosterSoftStart, &[0x17, 0x17, 0x28, 0x17])
-                    .await?;
-                self.send(spi, Command::PowerSetting, &[0x07, 0x07, 0x3a, 0x3a, 0x3])
-                    .await?;
-                self.send(spi, Command::PanelSetting, &[0x1f]).await?;
-                self.send(spi, Command::PllControl, &[0x06]).await?;
-                self.send(spi, Command::TconResolution, &[0x03, 0x20, 0x01, 0xe0])
-                    .await?;
-                self.send(spi, Command::DualSpi, &[0x00]).await?;
-                self.data_settings = DataFlags::BorderWhite | DataFlags::PosPol;
-                self.send(
-                    spi,
-                    Command::VcomAndDataIntervalSetting,
-                    &[self.data_settings.bits(), VCOM_INTERVAL_10],
-                )
-                .await?;
-                self.send(spi, Command::TconSetting, &[0x22]).await?;
-
-                self.wait_if_busy(spi).await?;
-            }
-        }
-        Ok(())
-    }
-
-    async fn set_refresh_mode(
-        &mut self,
-        spi: &mut <HW as EpdHw>::Spi,
-        mode: Self::RefreshMode,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Changing refresh mode to {:?}", mode);
-        self.refresh_mode = Some(mode);
-
-        // Update bypass if needed.
-        match mode {
-            RefreshMode::Full => self.init(spi, mode).await,
-            RefreshMode::Partial => self.init_part(spi).await,
-            RefreshMode::Fast => self.init_fast(spi).await,
-        }
-    }
-
-    async fn reset(&mut self) -> Result<(), <HW as EpdHw>::Error> {
-        debug!("Resetting EPD");
-        self.hw.reset().set_high()?;
-        self.hw.delay().delay_ms(10).await;
-        self.hw.reset().set_low()?;
-        self.hw.delay().delay_ms(2).await;
-        self.hw.reset().set_high()?;
-        self.hw.delay().delay_ms(200).await;
-        Ok(())
-    }
-
-    async fn sleep(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+    async fn sleep(mut self, spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
         debug!("Sleeping EPD");
-        self.wait_if_busy(spi).await?;
         self.send(spi, Command::PowerOff, &[]).await?;
-        self.wait_if_busy(spi).await?;
         self.send(spi, Command::DeepSleep, &[0xa5]).await?;
-        Ok(())
+        Ok(Epd7In5v2 {
+            hw: self.hw,
+            power_hw: self.power_hw,
+            state: StateAsleep {
+                wake_state: self.state,
+            },
+        })
     }
-
-    async fn wake(&mut self, _spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+}
+impl<HW: EpdHw, PHW: EPDPowerHw, W: StateAwake> Wake<HW::Spi, HW::Error>
+    for Epd7In5v2<HW, PHW, StateAsleep<W>>
+{
+    type DisplayOut = Epd7In5v2<HW, PHW, W>;
+    async fn wake(self, _spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
         debug!("Waking EPD");
         self.reset().await
-        // Confirmed with a physical screen that init is not required after waking.
     }
+}
 
-    async fn display_buffer(
-        &mut self,
-        spi: &mut HW::Spi,
-        buffer: &Self::Buffer,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        self.wait_if_busy(spi).await?;
-        self.write_old_framebuffer(spi, buffer).await?;
-        self.write_framebuffer(spi, buffer).await?;
-        self.update_display(spi).await?;
-        self.wait_if_busy(spi).await?;
+impl<HW: EpdHw, PHW: EPDPowerHw> Displayable<HW::Spi, HW::Error>
+    for Epd7In5v2<HW, PHW, StateReady>
+{
+    async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+        // Enable the clock and CP (?), and then display the data from the RAM. Note that there are
+        // two RAM buffers, so this will swap the active buffer. Calling this function twice in a row
+        // without writing further to RAM therefore results in displaying the previous image.
+        debug!("Updating display");
+        self.send(spi, Command::DisplayRefresh, &[]).await?;
+        self.hw.delay().delay_ms(100).await;
+        self.hw.wait_if_busy().await?;
         Ok(())
     }
+}
 
-    async fn display_partial_buffer(
+impl<HW: EpdHw, PHW: EPDPowerHw> DisplaySimple<1, 1, HW::Spi, HW::Error>
+    for Epd7In5v2<HW, PHW, StateReady>
+{
+    async fn write_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
-        buffer: &Self::Buffer,
-        area: Rectangle,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        self.wait_if_busy(spi).await?;
+        buf: &dyn BufferView<1, 1>,
+    ) -> Result<(), HW::Error> {
+        self.send(spi, Command::DataStartTransmission2, buf.data()[0])
+            .await
+    }
 
-        self.data_settings = DataFlags::EnableBorderHiZ
+    async fn display_framebuffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buf: &dyn BufferView<1, 1>,
+    ) -> Result<(), HW::Error> {
+        self.write_framebuffer(spi, buf).await?;
+        self.update_display(spi).await
+    }
+}
+
+impl<HW: EpdHw, PHW: EPDPowerHw> DisplayPartial<1, 1, HW::Spi, HW::Error>
+    for Epd7In5v2<HW, PHW, StateReady>
+{
+    async fn write_base_framebuffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buf: &dyn BufferView<1, 1>,
+    ) -> Result<(), HW::Error> {
+        self.send(spi, Command::DataStartTransmission1, buf.data()[0])
+            .await
+    }
+}
+
+impl<HW: EpdHw, PHW: EPDPowerHw> DisplayPartialArea<1, 1, HW::Spi, HW::Error>
+    for Epd7In5v2<HW, PHW, StateReady>
+{
+    async fn display_partial_framebuffer(
+        &mut self,
+        spi: &mut HW::Spi,
+        buf: &dyn BufferView<1, 1>,
+        area: Rectangle,
+    ) -> Result<(), HW::Error> {
+        if self.state.mode != Partial {
+            todo!("Figure out how to throw an actual error here");
+        }
+
+        self.hw.wait_if_busy().await?;
+
+        self.state.data_settings = DataFlags::EnableBorderHiZ
             | DataFlags::BorderBlack
             | DataFlags::NewToOldCopy
             | DataFlags::PosPol;
         self.send(
             spi,
             Command::VcomAndDataIntervalSetting,
-            &[self.data_settings.bits(), VCOM_INTERVAL_10],
+            &[self.state.data_settings.bits(), VCOM_INTERVAL_10],
         )
         .await?;
         //Enter partial mode
@@ -542,70 +718,20 @@ where
         spi.write(&[Command::DataStartTransmission2.register()])
             .await?;
 
-        let full_data = buffer.data();
+        let full_data = buf.data()[0];
 
         // High for data
         self.hw.dc().set_high()?;
         for j in min_y..=max_y {
-            let start_index =
-                ((j as u32 * buffer.bounding_box().size.width + min_x as u32) / 8) as usize;
+            let start_index = ((j as u32 * buf.window().size.width + min_x as u32) / 8) as usize;
             let stop_index = start_index + row_num_bytes as usize;
             spi.write(&full_data[start_index..=stop_index]).await?;
             trace!("Wrote: {:?}", &full_data[start_index..=stop_index]);
         }
 
         self.update_display(spi).await?;
-        self.wait_if_busy(spi).await?;
         // Exit partial mode
         self.send(spi, Command::ExitPartialMode, &[]).await?;
-        Ok(())
-    }
-
-    async fn write_framebuffer(
-        &mut self,
-        spi: &mut HW::Spi,
-        buffer: &Self::Buffer,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        self.wait_if_busy(spi).await?;
-        self.write_image(spi, buffer.data()).await?;
-        Ok(())
-    }
-
-    async fn set_window(
-        &mut self,
-        _spi: &mut HW::Spi,
-        _shape: Rectangle,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        unimplemented!("Setting window is not needed for this EPD type");
-    }
-
-    async fn set_cursor(
-        &mut self,
-        _spi: &mut HW::Spi,
-        _position: Point,
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        unimplemented!("The display hardware has no 'cursor'");
-    }
-
-    async fn write_image(
-        &mut self,
-        spi: &mut HW::Spi,
-        image: &[u8],
-    ) -> Result<(), <HW as EpdHw>::Error> {
-        self.wait_if_busy(spi).await?;
-        self.send(spi, Command::DataStartTransmission2, image)
-            .await?;
-        Ok(())
-    }
-
-    async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
-        // Enable the clock and CP (?), and then display the data from the RAM. Note that there are
-        // two RAM buffers, so this will swap the active buffer. Calling this function twice in a row
-        // without writing further to RAM therefore results in displaying the previous image.
-        debug!("Updating display");
-        self.send(spi, Command::DisplayRefresh, &[]).await?;
-        self.hw.delay().delay_ms(100).await;
-        self.wait_if_busy(spi).await?;
         Ok(())
     }
 }

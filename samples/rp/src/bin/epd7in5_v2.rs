@@ -3,16 +3,16 @@
 #![no_std]
 #![no_main]
 
-mod hw;
-
 use defmt::{debug, expect, info};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{Level, Output};
+use embassy_rp::peripherals;
 use embassy_rp::spi::{self, Spi};
+use embassy_rp::Peri;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Instant, Timer};
+use embassy_time::Timer;
 use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::BinaryColor;
@@ -20,12 +20,30 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle};
 use epd_waveshare_async::epd7in5_v2::{self};
+use epd_waveshare_async::epd7in5_v2::{Epd7In5v2, RefreshMode};
 use epd_waveshare_async::{
-    epd7in5_v2::{Epd7In5v2, RefreshMode},
-    Epd,
+    DisplayPartial, DisplayPartialArea, DisplaySimple, Displayable, PowerOff, PowerOn, Sleep, Wake,
 };
-use hw::*;
+use rp_samples::{DisplayHw, DisplayPowerHw};
 use {defmt_rtt as _, panic_probe as _};
+
+assign_resources::assign_resources! {
+    spi_hw: SpiP {
+        spi: SPI1,
+        clk: PIN_10,
+        tx: PIN_11,
+        dma_tx: DMA_CH3,
+        cs: PIN_9,
+    },
+    epd_hw: DisplayP {
+        reset: PIN_12,
+        dc: PIN_8,
+        busy: PIN_13,
+    },
+    epd_phw: PowerP {
+        power: PIN_14,
+    }
+}
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -59,17 +77,24 @@ async fn main(_spawner: Spawner) {
     // CS is active low.
     let cs_pin = Output::new(resources.spi_hw.cs, Level::Low);
     let mut spi = SpiDevice::new(&raw_spi, cs_pin);
-    let mut epd = Epd7In5v2::new(DisplayHw::new(resources.epd_hw));
+    let epd = Epd7In5v2::new(
+        DisplayHw::new(
+            resources.epd_hw.dc,
+            resources.epd_hw.reset,
+            resources.epd_hw.busy,
+        ),
+        DisplayPowerHw::new(resources.epd_phw.power),
+    );
 
     info!("Initializing EPD");
-    expect!(epd.turn_on().await, "Failed to turn on the EPD");
-    expect!(
+    let epd = expect!(epd.power_on().await, "Failed to power on the EPD");
+    let mut epd = expect!(
         epd.init(&mut spi, RefreshMode::Full).await,
         "Failed to initialize EPD"
     );
     info!("Initialized EPD");
 
-    let mut buffer = epd.new_buffer();
+    let mut buffer = epd7in5_v2::new_binary_buffer();
     buffer
         .fill_solid(&buffer.bounding_box(), BinaryColor::Off)
         .unwrap();
@@ -88,16 +113,20 @@ async fn main(_spawner: Spawner) {
 
     info!("Displaying four horizontal blocks");
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display buffer"
     );
     Timer::after_secs(5).await;
 
     info!("Changing to partial refresh mode");
-    expect!(
+    let mut epd = expect!(
         epd.set_refresh_mode(&mut spi, RefreshMode::Partial).await,
         "Failed to set refresh mode"
     );
+
+    info!("Setting base framebuffer to white to force update of changed pixels");
+    buffer.clear(BinaryColor::Off).unwrap();
+    epd.write_base_framebuffer(&mut spi, &buffer).await.unwrap();
 
     info!("Displaying text");
     let hello_str = "Hello, EPD!";
@@ -110,7 +139,7 @@ async fn main(_spawner: Spawner) {
             Text::with_text_style(&hello_str[0..t], Point::new(10, 10), character_style, style);
         text.draw(&mut buffer).unwrap();
         expect!(
-            epd.display_partial_buffer(&mut spi, &buffer, text.bounding_box())
+            epd.display_partial_framebuffer(&mut spi, &buffer, text.bounding_box())
                 .await,
             "Failed to display text buffer"
         );
@@ -119,9 +148,10 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(4).await;
 
     // Display text with fast refresh mode
-    epd.set_refresh_mode(&mut spi, RefreshMode::Fast)
-        .await
-        .unwrap();
+    let mut epd = expect!(
+        epd.set_refresh_mode(&mut spi, RefreshMode::Fast).await,
+        "Failed to switch to fast refresh m"
+    );
     info!("Displaying second text");
     buffer
         .fill_solid(&buffer.bounding_box(), BinaryColor::Off)
@@ -145,19 +175,20 @@ async fn main(_spawner: Spawner) {
         text.bounding_box().size.height
     );
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display text buffer"
     );
     Timer::after_secs(4).await;
 
     // Display clock with partial refresh mode
-    epd.set_refresh_mode(&mut spi, RefreshMode::Partial)
-        .await
-        .unwrap();
+    let mut epd = expect!(
+        epd.set_refresh_mode(&mut spi, RefreshMode::Partial).await,
+        "Failed to set EPD to partial refresh mode"
+    );
     buffer
         .fill_solid(&buffer.bounding_box(), BinaryColor::Off)
         .unwrap();
-    epd.write_old_framebuffer(&mut spi, &buffer).await.unwrap();
+    epd.write_base_framebuffer(&mut spi, &buffer).await.unwrap();
     for time_str in ["12:24:31", "12:24:32", "12:24:33", "12:24:34", "12:24:35"] {
         let mut style = TextStyle::default();
         style.alignment = Alignment::Center;
@@ -173,7 +204,7 @@ async fn main(_spawner: Spawner) {
             text.bounding_box().size.height
         );
         expect!(
-            epd.display_partial_buffer(&mut spi, &buffer, text.bounding_box())
+            epd.display_partial_framebuffer(&mut spi, &buffer, text.bounding_box())
                 .await,
             "Failed to display text buffer"
         );
@@ -184,69 +215,50 @@ async fn main(_spawner: Spawner) {
         Timer::after_millis(1000).await;
     }
 
-    epd.sleep(&mut spi).await.unwrap();
+    let epd = expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
 
     Timer::after_secs(4).await;
-    epd.init(&mut spi, RefreshMode::Fast).await.unwrap();
+    let epd = expect!(epd.wake(&mut spi).await, "Failed to wake EPD");
+    let mut epd = expect!(
+        epd.init(&mut spi, RefreshMode::Fast).await,
+        "Failed to initialize EPD"
+    );
 
     for i in 0..5 {
         buffer
             .fill_solid(&buffer.bounding_box(), BinaryColor::On)
             .unwrap();
-        epd.write_old_framebuffer(&mut spi, &buffer).await.unwrap();
+        epd.write_base_framebuffer(&mut spi, &buffer).await.unwrap();
         let top_left = Point::new(160 + 8 * i, 160 + 8 * i);
         let rect = Rectangle::new(top_left, Size::new(80, 80));
         buffer.fill_solid(&rect, BinaryColor::Off).unwrap();
-        epd.display_buffer(&mut spi, &buffer).await.unwrap();
+        epd.display_framebuffer(&mut spi, &buffer).await.unwrap();
         Timer::after_secs(5).await;
     }
 
-    epd.sleep(&mut spi).await.unwrap();
-    epd.turn_off().await.unwrap();
+    let epd = expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
+    let epd = expect!(epd.power_off().await, "Failed to turn off power to EPD");
     Timer::after_secs(4).await;
 
-    epd.turn_on().await.unwrap();
-    epd.init(&mut spi, RefreshMode::Full).await.unwrap();
+    let epd = expect!(epd.power_on().await, "Failed to turn on power to EPD");
+    let mut epd = expect!(
+        epd.init(&mut spi, RefreshMode::Full).await,
+        "Failed to initialize EPD"
+    );
 
-    info!("Displaying check buffer");
-    let before_buffer_draw = Instant::now();
+    info!("Displaying text with partial refresh over black buffer");
     // Clear first.
     buffer
-        .fill_solid(&buffer.bounding_box(), BinaryColor::Off)
+        .fill_solid(&buffer.bounding_box(), BinaryColor::On)
         .unwrap();
-    let mut top_left = Point::new(0, 0);
-    let buffer_width = buffer.bounding_box().size.width;
-    let mut box_size = buffer_width;
-    let mut color = BinaryColor::On;
-    while box_size > 0 {
-        for _ in 0..(buffer_width / box_size) {
-            buffer
-                .fill_solid(
-                    &Rectangle::new(top_left, Size::new(box_size, box_size)),
-                    color,
-                )
-                .unwrap();
-            color = color.invert();
-            top_left.x += box_size as i32;
-        }
-        top_left.x = 0;
-        top_left.y += box_size as i32;
-        color = color.invert();
-        box_size /= 2;
-    }
-    let after_buffer_draw = Instant::now();
-    info!(
-        "Check buffer drawn in {} ms",
-        (after_buffer_draw - before_buffer_draw).as_millis()
-    );
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display check buffer"
     );
     Timer::after_secs(4).await;
 
     info!("Changing to partial refresh mode");
-    expect!(
+    let mut epd = expect!(
         epd.set_refresh_mode(&mut spi, RefreshMode::Partial).await,
         "Failed to set refresh mode"
     );
@@ -264,7 +276,7 @@ async fn main(_spawner: Spawner) {
     );
     text.draw(&mut buffer).unwrap();
     expect!(
-        epd.display_partial_buffer(&mut spi, &buffer, text.bounding_box())
+        epd.display_partial_framebuffer(&mut spi, &buffer, text.bounding_box())
             .await,
         "Failed to display black half of text"
     );
@@ -281,21 +293,24 @@ async fn main(_spawner: Spawner) {
     buffer.fill_solid(&right_half, BinaryColor::Off).unwrap();
     // Just display white pixels (i.e. same as before plus left side of text).
     expect!(
-        epd.display_partial_buffer(&mut spi, &buffer, text.bounding_box())
+        epd.display_partial_framebuffer(&mut spi, &buffer, text.bounding_box())
             .await,
         "Failed to display white half of text"
     );
 
     info!("Sleeping EPD");
-    expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
+    let epd = expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     Timer::after_secs(2).await;
 
     info!("Waking EPD");
-    expect!(epd.wake(&mut spi).await, "Failed to wake EPD");
+    let epd = expect!(epd.wake(&mut spi).await, "Failed to wake EPD");
     Timer::after_secs(1).await;
 
     // Prepare for border updates. These require full refresh mode.
-    epd.init(&mut spi, RefreshMode::Full).await.unwrap();
+    let mut epd = expect!(
+        epd.init(&mut spi, RefreshMode::Full).await,
+        "Failed to initialize EPD"
+    );
 
     // Clear both framebuffers to make the border more obvious.
     buffer.clear(BinaryColor::On).unwrap();
@@ -314,7 +329,8 @@ async fn main(_spawner: Spawner) {
     // Set old framebuffer to different color to force full-screen update
     // Otherwise the screen performs no update
     buffer.clear(BinaryColor::On).unwrap();
-    epd.write_old_framebuffer(&mut spi, &buffer).await.unwrap();
+    // epd.write_framebuffer(&mut spi, &buffer).await.unwrap();
+    epd.write_base_framebuffer(&mut spi, &buffer).await.unwrap();
     buffer.clear(BinaryColor::Off).unwrap();
     epd.write_framebuffer(&mut spi, &buffer).await.unwrap();
     info!("Setting black border");
@@ -334,23 +350,26 @@ async fn main(_spawner: Spawner) {
         "Failed to set border color"
     );
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to refresh display"
     );
     Timer::after_secs(3).await;
 
     info!("Clearing screen for the final time");
-    epd.init(&mut spi, RefreshMode::Full).await.unwrap();
+    let mut epd = expect!(
+        epd.init(&mut spi, RefreshMode::Full).await,
+        "Failed to initialize EPD"
+    );
     buffer
         .fill_solid(&buffer.bounding_box(), BinaryColor::Off)
         .unwrap();
     info!("Displaying white buffer");
     expect!(
-        epd.display_buffer(&mut spi, &buffer).await,
+        epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display buffer"
     );
     Timer::after_secs(5).await;
-    expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
-    epd.turn_off().await.unwrap();
+    let epd = expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
+    epd.power_off().await.unwrap();
     info!("Done");
 }
