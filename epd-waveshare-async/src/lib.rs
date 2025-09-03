@@ -43,7 +43,7 @@ mod hw;
 mod log;
 
 use crate::buffer::BufferView;
-pub use crate::hw::EpdHw;
+pub use crate::hw::{BusyHw, DcHw, DelayHw, ErrorHw, ResetHw, SpiHw};
 
 /// Indicates usage errors due to incorrect states.
 ///

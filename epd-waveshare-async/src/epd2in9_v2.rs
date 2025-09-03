@@ -13,9 +13,9 @@ use crate::{
     buffer::{
         binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView, Gray2SplitBuffer,
     },
-    hw::CommandDataSend as _,
+    hw::{BusyHw, CommandDataSend as _, DcHw, DelayHw, ErrorHw, ResetHw, SpiHw},
     log::{debug, debug_assert},
-    DisplayPartial, DisplaySimple, Displayable, EpdHw, Reset, Sleep, Wake,
+    DisplayPartial, DisplaySimple, Displayable, Reset, Sleep, Wake,
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -329,11 +329,7 @@ const DRIVER_OUTPUT_INIT_DATA: [u8; 3] = [0x27, 0x01, 0x00];
 /// depending on the display mode.
 ///
 /// When using `BinaryColor`, `Off` is black and `On` is white.
-pub struct Epd2In9V2<HW, STATE>
-where
-    HW: EpdHw,
-    STATE: State,
-{
+pub struct Epd2In9V2<HW, STATE> {
     hw: HW,
     state: STATE,
 }
@@ -374,7 +370,11 @@ impl<W: StateAwake> State for StateAsleep<W> {}
 
 impl<HW> Epd2In9V2<HW, StateUninitialized>
 where
-    HW: EpdHw,
+    HW: BusyHw + DcHw + ResetHw + DelayHw + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
 {
     pub fn new(hw: HW) -> Self {
         Epd2In9V2 {
@@ -395,7 +395,11 @@ pub enum Bypass {
 
 impl<HW, STATE> Epd2In9V2<HW, STATE>
 where
-    HW: EpdHw,
+    HW: BusyHw + DcHw + ResetHw + DelayHw + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
     STATE: StateAwake,
 {
     /// Initialises the display.
@@ -415,7 +419,16 @@ where
         epd.set_refresh_mode_impl(spi, mode).await?;
         Ok(epd)
     }
+}
 
+impl<HW, STATE> Epd2In9V2<HW, STATE>
+where
+    HW: BusyHw + DcHw + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+    STATE: StateAwake,
+{
     /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
     pub async fn send(
         &mut self,
@@ -427,7 +440,13 @@ where
     }
 }
 
-impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
+impl<HW> Epd2In9V2<HW, StateReady>
+where
+    HW: BusyHw + DcHw + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
     /// Sets the refresh mode.
     pub async fn set_refresh_mode(
         &mut self,
@@ -445,9 +464,9 @@ impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
 
     async fn set_refresh_mode_impl(
         &mut self,
-        spi: &mut <HW as EpdHw>::Spi,
+        spi: &mut HW::Spi,
         mode: RefreshMode,
-    ) -> Result<(), <HW as EpdHw>::Error> {
+    ) -> Result<(), HW::Error> {
         // Reset all configurations to default.
         self.send(spi, Command::SwReset, &[]).await?;
 
@@ -537,7 +556,7 @@ impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
         &mut self,
         spi: &mut HW::Spi,
         shape: Rectangle,
-    ) -> Result<(), <HW as EpdHw>::Error> {
+    ) -> Result<(), HW::Error> {
         let (x_start, x_end) = if self.state.mode == RefreshMode::Gray2 {
             // When using gray2, for some reason the position is misaligned. This fixes it.
             let x_start = shape.top_left.x + 8;
@@ -579,7 +598,7 @@ impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
         &mut self,
         spi: &mut HW::Spi,
         position: Point,
-    ) -> Result<(), <HW as EpdHw>::Error> {
+    ) -> Result<(), HW::Error> {
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
         debug_assert_eq!(position.x % 8, 0, "position.x must be 8-bit aligned");
@@ -597,7 +616,11 @@ impl<HW: EpdHw> Epd2In9V2<HW, StateReady> {
     }
 }
 
-async fn reset_impl<HW: EpdHw>(hw: &mut HW) -> Result<(), HW::Error> {
+async fn reset_impl<HW>(hw: &mut HW) -> Result<(), HW::Error>
+where
+    HW: ResetHw + DelayHw + ErrorHw,
+    HW::Error: From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>,
+{
     debug!("Resetting EPD");
     // Assume reset is already high.
     hw.reset().set_low()?;
@@ -607,7 +630,11 @@ async fn reset_impl<HW: EpdHw>(hw: &mut HW) -> Result<(), HW::Error> {
     Ok(())
 }
 
-impl<HW: EpdHw, STATE: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, STATE> {
+impl<HW, STATE: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, STATE>
+where
+    HW: ResetHw + DelayHw + ErrorHw,
+    HW::Error: From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>,
+{
     type DisplayOut = Epd2In9V2<HW, STATE>;
 
     async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
@@ -616,7 +643,11 @@ impl<HW: EpdHw, STATE: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, STATE> {
     }
 }
 
-impl<HW: EpdHw, W: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, StateAsleep<W>> {
+impl<HW, W: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, StateAsleep<W>>
+where
+    HW: ResetHw + DelayHw + ErrorHw,
+    HW::Error: From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>,
+{
     type DisplayOut = Epd2In9V2<HW, W>;
 
     async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
@@ -628,10 +659,16 @@ impl<HW: EpdHw, W: StateAwake> Reset<HW::Error> for Epd2In9V2<HW, StateAsleep<W>
     }
 }
 
-impl<HW: EpdHw, STATE: StateAwake> Sleep<HW::Spi, HW::Error> for Epd2In9V2<HW, STATE> {
+impl<HW, STATE: StateAwake> Sleep<HW::Spi, HW::Error> for Epd2In9V2<HW, STATE>
+where
+    HW: BusyHw + DcHw + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
     type DisplayOut = Epd2In9V2<HW, StateAsleep<STATE>>;
 
-    async fn sleep(mut self, spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
+    async fn sleep(mut self, spi: &mut HW::Spi) -> Result<Self::DisplayOut, HW::Error> {
         debug!("Sleeping EPD");
         self.send(spi, Command::DeepSleepMode, &[0x01]).await?;
         Ok(Epd2In9V2 {
@@ -643,16 +680,29 @@ impl<HW: EpdHw, STATE: StateAwake> Sleep<HW::Spi, HW::Error> for Epd2In9V2<HW, S
     }
 }
 
-impl<HW: EpdHw, W: StateAwake> Wake<HW::Spi, HW::Error> for Epd2In9V2<HW, StateAsleep<W>> {
+impl<HW, W: StateAwake> Wake<HW::Spi, HW::Error> for Epd2In9V2<HW, StateAsleep<W>>
+where
+    HW: BusyHw + DcHw + ResetHw + DelayHw + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
     type DisplayOut = Epd2In9V2<HW, W>;
-    async fn wake(self, _spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
+    async fn wake(self, _spi: &mut HW::Spi) -> Result<Self::DisplayOut, HW::Error> {
         debug!("Waking EPD");
         self.reset().await
     }
 }
 
-impl<HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
-    async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+impl<HW> Displayable<HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady>
+where
+    HW: BusyHw + DcHw + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
+    async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), HW::Error> {
         debug!("Updating display");
 
         let mode = self.state.mode;
@@ -665,7 +715,13 @@ impl<HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
     }
 }
 
-impl<HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
+impl<HW> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady>
+where
+    HW: BusyHw + DcHw + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
     async fn display_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
@@ -688,7 +744,13 @@ impl<HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, StateR
     }
 }
 
-impl<HW: EpdHw> DisplaySimple<1, 2, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
+impl<HW> DisplaySimple<1, 2, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady>
+where
+    HW: BusyHw + DcHw + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
     async fn display_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
@@ -712,7 +774,13 @@ impl<HW: EpdHw> DisplaySimple<1, 2, HW::Spi, HW::Error> for Epd2In9V2<HW, StateR
     }
 }
 
-impl<HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady> {
+impl<HW> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9V2<HW, StateReady>
+where
+    HW: BusyHw + DcHw + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
     async fn write_base_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
