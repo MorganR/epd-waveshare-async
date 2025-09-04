@@ -45,19 +45,6 @@ mod log;
 use crate::buffer::BufferView;
 pub use crate::hw::{BusyHw, DcHw, DelayHw, ErrorHw, ResetHw, SpiHw};
 
-/// Indicates usage errors due to incorrect states.
-///
-/// These errors are allowed to occur as runtime errors instead of being prevented at compile time
-/// through stateful types. The alternative was tried, but was awkward to use in practice since
-/// async traits are not dyn compatible.
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-#[derive(Debug, Clone)]
-pub enum Error {
-    Uninitialized,
-    Sleeping,
-    WrongRefreshMode,
-}
-
 /// Displays that have a hardware reset.
 pub trait Reset<ERROR> {
     type DisplayOut;

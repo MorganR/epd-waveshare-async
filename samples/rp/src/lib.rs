@@ -11,7 +11,7 @@ use embassy_rp::spi;
 use embassy_rp::Peri;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Delay;
-use epd_waveshare_async::{BusyHw, DcHw, DelayHw, Error as EpdError, ErrorHw, ResetHw, SpiHw};
+use epd_waveshare_async::{BusyHw, DcHw, DelayHw, ErrorHw, ResetHw, SpiHw};
 use thiserror::Error as ThisError;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -90,8 +90,6 @@ impl<'a, SPI: spi::Instance + 'a> SpiHw for DisplayHw<'a, SPI> {
 pub enum Error {
     #[error("SPI error: {0:?}")]
     SpiError(RawSpiError),
-    #[error("Display error: {0:?}")]
-    DisplayError(EpdError),
 }
 
 impl From<Infallible> for Error {
@@ -103,11 +101,5 @@ impl From<Infallible> for Error {
 impl From<RawSpiError> for Error {
     fn from(e: RawSpiError) -> Self {
         Error::SpiError(e)
-    }
-}
-
-impl From<EpdError> for Error {
-    fn from(e: EpdError) -> Self {
-        Error::DisplayError(e)
     }
 }

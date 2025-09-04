@@ -1,4 +1,3 @@
-use core::error::Error as CoreError;
 
 use embedded_hal::{
     digital::{ErrorType as PinErrorType, InputPin, OutputPin},
@@ -13,7 +12,7 @@ use crate::log::trace;
 /// Drivers rely on this trait to provide a single Error type that supports [From] conversions
 /// from all the hardware-specific error types.
 pub trait ErrorHw {
-    type Error: CoreError + From<crate::Error>;
+    type Error;
 }
 
 /// Describes the SPI hardware to use for interacting with the EPD.
