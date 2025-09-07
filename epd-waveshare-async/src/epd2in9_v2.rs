@@ -4,7 +4,7 @@ use embedded_graphics::{
     primitives::Rectangle,
 };
 use embedded_hal::{
-    digital::OutputPin,
+    digital::{OutputPin, PinState},
     spi::{Phase, Polarity},
 };
 use embedded_hal_async::delay::DelayNs;
@@ -178,6 +178,8 @@ pub const RECOMMENDED_SPI_PHASE: Phase = Phase::CaptureOnFirstTransition;
 /// Use this polarity in conjunction with [RECOMMENDED_SPI_PHASE] so that the EPD can capture data
 /// on the rising edge.
 pub const RECOMMENDED_SPI_POLARITY: Polarity = Polarity::IdleLow;
+/// The default pin state that indicates the display is busy.
+pub const DEFAULT_BUSY_WHEN: PinState = PinState::High;
 
 /// Low-level commands for the Epd2In9 v2 display. You probably want to use the other methods
 /// exposed on the [Epd2In9V2] for most operations, but can send commands directly with [Epd2In9V2::send] for low-level

@@ -1,6 +1,5 @@
-
 use embedded_hal::{
-    digital::{ErrorType as PinErrorType, InputPin, OutputPin},
+    digital::{ErrorType as PinErrorType, InputPin, OutputPin, PinState},
     spi::ErrorType as SpiErrorType,
 };
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
@@ -39,6 +38,12 @@ pub trait BusyHw {
     type Busy: InputPin + Wait;
 
     fn busy(&mut self) -> &mut Self::Busy;
+
+    /// Indicates which state of the busy pin indicates that it's busy.
+    ///
+    /// This is user-configurable, rather than enforced by the display driver, to allow the user to
+    /// use more unexpected wiring configurations.
+    fn busy_when(&self) -> embedded_hal::digital::PinState;
 }
 
 /// Provides access to delay functionality for EPD timing control.
@@ -73,13 +78,22 @@ where
     <HW as ErrorHw>::Error: From<<HW::Busy as PinErrorType>::Error>,
 {
     async fn wait_if_busy(&mut self) -> Result<(), HW::Error> {
+        let busy_when = self.busy_when();
         let busy = self.busy();
-        // Note: the datasheet states that busy pin is active low, i.e. we should wait for it when
-        // it's low, but this is incorrect. The sample code treats it as active high, which works.
-        if busy.is_high().unwrap() {
-            trace!("Waiting for busy EPD");
-            busy.wait_for_low().await?;
-        }
+        match busy_when {
+            PinState::High => {
+                if busy.is_high()? {
+                    trace!("Waiting for busy EPD");
+                    busy.wait_for_low().await?;
+                }
+            }
+            PinState::Low => {
+                if busy.is_low()? {
+                    trace!("Waiting for busy EPD");
+                    busy.wait_for_high().await?;
+                }
+            }
+        };
         Ok(())
     }
 }

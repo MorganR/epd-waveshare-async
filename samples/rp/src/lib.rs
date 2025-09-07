@@ -11,6 +11,7 @@ use embassy_rp::spi;
 use embassy_rp::Peri;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Delay;
+use embedded_hal::digital::PinState;
 use epd_waveshare_async::{BusyHw, DcHw, DelayHw, ErrorHw, ResetHw, SpiHw};
 use thiserror::Error as ThisError;
 use {defmt_rtt as _, panic_probe as _};
@@ -20,6 +21,7 @@ pub struct DisplayHw<'a, SPI> {
     dc: Output<'a>,
     reset: Output<'a>,
     busy: Input<'a>,
+    busy_when: PinState,
     delay: Delay,
     _spi_type: PhantomData<SPI>,
 }
@@ -29,6 +31,7 @@ impl<'a, SPI: spi::Instance> DisplayHw<'a, SPI> {
         dc: Peri<'a, DC>,
         reset: Peri<'a, RESET>,
         busy: Peri<'a, BUSY>,
+        busy_when: PinState,
     ) -> Self {
         let dc = Output::new(dc, Level::High);
         let reset = Output::new(reset, Level::High);
@@ -38,6 +41,7 @@ impl<'a, SPI: spi::Instance> DisplayHw<'a, SPI> {
             dc,
             reset,
             busy,
+            busy_when,
             delay: Delay,
             _spi_type: PhantomData,
         }
@@ -71,6 +75,10 @@ impl<'a, SPI> BusyHw for DisplayHw<'a, SPI> {
 
     fn busy(&mut self) -> &mut Self::Busy {
         &mut self.busy
+    }
+
+    fn busy_when(&self) -> embedded_hal::digital::PinState {
+        self.busy_when
     }
 }
 
