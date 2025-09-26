@@ -21,6 +21,7 @@ panic-probe = { version = "1.0", features = ["print-defmt"] }
 
 defmt.workspace = true
 embedded-graphics.workspace = true
+embedded-hal.workspace = true
 embedded-hal-async.workspace = true
 epd-waveshare-async = { path = "../../epd-waveshare-async", features = ["defmt"] }
 embassy-time.workspace = true

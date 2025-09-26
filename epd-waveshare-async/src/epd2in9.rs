@@ -5,16 +5,16 @@ use embedded_graphics::{
     primitives::Rectangle,
 };
 use embedded_hal::{
-    digital::OutputPin,
+    digital::{OutputPin, PinState},
     spi::{Phase, Polarity},
 };
 use embedded_hal_async::delay::DelayNs;
 
 use crate::{
     buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView},
-    hw::CommandDataSend as _,
+    hw::{BusyHw, DcHw, DelayHw, ErrorHw, ResetHw},
     log::{debug, debug_assert},
-    DisplayPartial, DisplaySimple, Displayable, EpdHw, Reset, Sleep, Wake,
+    DisplayPartial, DisplaySimple, Displayable, Reset, Sleep, SpiHw, Wake,
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -81,6 +81,11 @@ pub const RECOMMENDED_SPI_PHASE: Phase = Phase::CaptureOnFirstTransition;
 /// Use this polarity in conjunction with [RECOMMENDED_SPI_PHASE] so that the EPD can capture data
 /// on the rising edge.
 pub const RECOMMENDED_SPI_POLARITY: Polarity = Polarity::IdleLow;
+/// The default pin state that indicates the display is busy.
+///
+/// Note: the datasheet states that busy pin is active low, i.e. we should wait for it when
+/// it's low, but this is incorrect. The sample code treats it as active high, which works.
+pub const DEFAULT_BUSY_WHEN: PinState = PinState::High;
 
 /// Low-level commands for the Epd2In9. You probably want to use the other methods exposed on the
 /// [Epd2In9] for most operations, but can send commands directly with [Epd2In9::send] for low-level
@@ -226,18 +231,18 @@ impl<W: StateAwake> State for StateAsleep<W> {}
 /// * [sample code](https://github.com/waveshareteam/e-Paper/blob/master/RaspberryPi_JetsonNano/python/lib/waveshare_epd/epd2in9.py)
 ///
 /// The display has a portrait orientation. This uses [BinaryColor], where `Off` is black and `On` is white.
-pub struct Epd2In9<HW, STATE>
-where
-    HW: EpdHw,
-    STATE: State,
-{
+pub struct Epd2In9<HW, STATE> {
     hw: HW,
     state: STATE,
 }
 
 impl<HW> Epd2In9<HW, StateUninitialized>
 where
-    HW: EpdHw,
+    HW: DcHw + ResetHw + BusyHw + DelayHw + ErrorHw + SpiHw,
+    HW::Error: From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
 {
     pub fn new(hw: HW) -> Self {
         Epd2In9 {
@@ -249,8 +254,12 @@ where
 
 impl<HW, STATE> Epd2In9<HW, STATE>
 where
-    HW: EpdHw,
+    HW: DcHw + ResetHw + BusyHw + DelayHw + ErrorHw + SpiHw,
     STATE: StateAwake,
+    HW::Error: From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
 {
     /// Initialise the display. This should be called before any other operations.
     pub async fn init(
@@ -291,7 +300,16 @@ where
         epd.set_refresh_mode_impl(spi, mode).await?;
         Ok(epd)
     }
+}
 
+impl<HW, STATE> Epd2In9<HW, STATE>
+where
+    HW: DcHw + BusyHw + ErrorHw + SpiHw,
+    STATE: StateAwake,
+    HW::Error: From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
     /// Sets the border to the specified colour. You need to call [Epd::update_display] using
     /// [RefreshMode::Full] afterwards to apply this change.
     ///
@@ -317,11 +335,18 @@ where
         command: Command,
         data: &[u8],
     ) -> Result<(), HW::Error> {
+        use crate::hw::CommandDataSend;
         self.hw.send(spi, command.register(), data).await
     }
 }
 
-impl<HW: EpdHw> Epd2In9<HW, StateReady> {
+impl<HW> Epd2In9<HW, StateReady>
+where
+    HW: DcHw + BusyHw + DelayHw + ErrorHw + SpiHw,
+    HW::Error: From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
     /// Sets the refresh mode.
     pub async fn set_refresh_mode(
         &mut self,
@@ -345,7 +370,7 @@ impl<HW: EpdHw> Epd2In9<HW, StateReady> {
         &mut self,
         spi: &mut HW::Spi,
         shape: Rectangle,
-    ) -> Result<(), <HW as EpdHw>::Error> {
+    ) -> Result<(), HW::Error> {
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
         let x_start = shape.top_left.x;
@@ -380,7 +405,7 @@ impl<HW: EpdHw> Epd2In9<HW, StateReady> {
         &mut self,
         spi: &mut HW::Spi,
         position: Point,
-    ) -> Result<(), <HW as EpdHw>::Error> {
+    ) -> Result<(), HW::Error> {
         // Use a debug assert as this is a soft failure in production; it will just lead to
         // slightly misaligned display content.
         debug_assert_eq!(position.x % 8, 0, "position.x must be 8-bit aligned");
@@ -419,8 +444,14 @@ impl<HW: EpdHw> Epd2In9<HW, StateReady> {
     }
 }
 
-impl<HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9<HW, StateReady> {
-    async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), <HW as EpdHw>::Error> {
+impl<HW> Displayable<HW::Spi, HW::Error> for Epd2In9<HW, StateReady>
+where
+    HW: DcHw + BusyHw + DelayHw + ErrorHw + SpiHw,
+    HW::Error: From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
+    async fn update_display(&mut self, spi: &mut HW::Spi) -> Result<(), HW::Error> {
         // Enable the clock and CP (?), and then display the data from the RAM. Note that there are
         // two RAM buffers, so this will swap the active buffer. Calling this function twice in a row
         // without writing further to RAM therefore results in displaying the previous image.
@@ -441,14 +472,19 @@ impl<HW: EpdHw> Displayable<HW::Spi, HW::Error> for Epd2In9<HW, StateReady> {
     }
 }
 
-impl<HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9<HW, StateReady> {
+impl<HW> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9<HW, StateReady>
+where
+    HW: DcHw + BusyHw + DelayHw + ErrorHw + SpiHw,
+    HW::Error: From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
     async fn display_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
         buf: &dyn BufferView<1, 1>,
     ) -> Result<(), HW::Error> {
         self.write_framebuffer(spi, buf).await?;
-
         self.update_display(spi).await
     }
 
@@ -464,7 +500,13 @@ impl<HW: EpdHw> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd2In9<HW, StateRea
     }
 }
 
-impl<HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9<HW, StateReady> {
+impl<HW> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9<HW, StateReady>
+where
+    HW: DcHw + BusyHw + DelayHw + ErrorHw + SpiHw,
+    HW::Error: From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
     /// Writes buffer data into the old internal framebuffer. This can be useful either:
     ///
     /// * to prep the next frame before the current one has been displayed (since the old buffer
@@ -474,7 +516,7 @@ impl<HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9<HW, StateRe
         &mut self,
         spi: &mut HW::Spi,
         buf: &dyn BufferView<1, 1>,
-    ) -> Result<(), <HW as EpdHw>::Error> {
+    ) -> Result<(), HW::Error> {
         let buffer_bounds = buf.window();
         self.set_window(spi, buffer_bounds).await?;
         self.set_cursor(spi, buffer_bounds.top_left).await?;
@@ -482,7 +524,11 @@ impl<HW: EpdHw> DisplayPartial<1, 1, HW::Spi, HW::Error> for Epd2In9<HW, StateRe
     }
 }
 
-async fn reset_impl<HW: EpdHw>(hw: &mut HW) -> Result<(), HW::Error> {
+async fn reset_impl<HW>(hw: &mut HW) -> Result<(), HW::Error>
+where
+    HW: ResetHw + DelayHw + ErrorHw,
+    HW::Error: From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>,
+{
     debug!("Resetting EPD");
     // Assume reset is already high.
     hw.reset().set_low()?;
@@ -492,7 +538,12 @@ async fn reset_impl<HW: EpdHw>(hw: &mut HW) -> Result<(), HW::Error> {
     Ok(())
 }
 
-impl<HW: EpdHw, STATE: StateAwake> Reset<HW::Error> for Epd2In9<HW, STATE> {
+impl<HW, STATE> Reset<HW::Error> for Epd2In9<HW, STATE>
+where
+    HW: ResetHw + DelayHw + ErrorHw,
+    HW::Error: From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>,
+    STATE: StateAwake,
+{
     type DisplayOut = Epd2In9<HW, STATE>;
 
     async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
@@ -501,7 +552,12 @@ impl<HW: EpdHw, STATE: StateAwake> Reset<HW::Error> for Epd2In9<HW, STATE> {
     }
 }
 
-impl<HW: EpdHw, W: StateAwake> Reset<HW::Error> for Epd2In9<HW, StateAsleep<W>> {
+impl<HW, W> Reset<HW::Error> for Epd2In9<HW, StateAsleep<W>>
+where
+    HW: ResetHw + DelayHw + ErrorHw,
+    HW::Error: From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>,
+    W: StateAwake,
+{
     type DisplayOut = Epd2In9<HW, W>;
 
     async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
@@ -513,10 +569,18 @@ impl<HW: EpdHw, W: StateAwake> Reset<HW::Error> for Epd2In9<HW, StateAsleep<W>> 
     }
 }
 
-impl<HW: EpdHw, STATE: StateAwake> Sleep<HW::Spi, HW::Error> for Epd2In9<HW, STATE> {
+impl<HW, STATE> Sleep<HW::Spi, HW::Error> for Epd2In9<HW, STATE>
+where
+    HW: DcHw + BusyHw + ErrorHw + SpiHw,
+    HW::Error: From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+    STATE: StateAwake,
+{
     type DisplayOut = Epd2In9<HW, StateAsleep<STATE>>;
 
-    async fn sleep(mut self, spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
+    async fn sleep(mut self, spi: &mut HW::Spi) -> Result<Self::DisplayOut, HW::Error>
+where {
         debug!("Sleeping EPD");
         self.send(spi, Command::DeepSleepMode, &[0x01]).await?;
         Ok(Epd2In9 {
@@ -528,13 +592,19 @@ impl<HW: EpdHw, STATE: StateAwake> Sleep<HW::Spi, HW::Error> for Epd2In9<HW, STA
     }
 }
 
-impl<HW: EpdHw, W: StateAwake> Wake<HW::Spi, HW::Error> for Epd2In9<HW, StateAsleep<W>> {
+impl<HW, W> Wake<HW::Spi, HW::Error> for Epd2In9<HW, StateAsleep<W>>
+where
+    HW: ResetHw + BusyHw + DelayHw + ErrorHw + SpiHw,
+    HW::Error: From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+    W: StateAwake,
+{
     type DisplayOut = Epd2In9<HW, W>;
 
-    async fn wake(self, _spi: &mut HW::Spi) -> Result<Self::DisplayOut, <HW as EpdHw>::Error> {
+    async fn wake(self, _spi: &mut HW::Spi) -> Result<Self::DisplayOut, HW::Error> {
         debug!("Waking EPD");
         self.reset().await
-
         // Confirmed with a physical screen that init is not required after waking.
     }
 }

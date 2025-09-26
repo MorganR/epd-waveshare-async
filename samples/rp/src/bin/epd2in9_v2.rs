@@ -78,6 +78,7 @@ async fn main(_spawner: Spawner) {
         resources.epd_hw.dc,
         resources.epd_hw.reset,
         resources.epd_hw.busy,
+        epd2in9_v2::DEFAULT_BUSY_WHEN,
     ));
 
     info!("Initializing EPD");

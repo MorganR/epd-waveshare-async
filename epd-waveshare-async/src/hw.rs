@@ -1,113 +1,60 @@
-use core::error::Error as CoreError;
-
 use embedded_hal::{
-    digital::{ErrorType as PinErrorType, InputPin, OutputPin},
+    digital::{ErrorType as PinErrorType, InputPin, OutputPin, PinState},
     spi::ErrorType as SpiErrorType,
 };
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
 
 use crate::log::trace;
 
-/// Provides access to the hardware needed to control an EPD.
+/// Provides access to a shared error type.
 ///
-/// This greatly simplifies the generics needed by the `Epd` trait and implementing types at the cost of implementing this trait.
-///
-/// In this example, we make the EPD generic over just the SPI type, but can drop generics for the pins and delay type.
-///
-/// ```rust
-/// use core::convert::Infallible;
-///
-/// use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
-/// use embassy_embedded_hal::shared_bus::SpiDeviceError;
-/// use embassy_rp::gpio::{Input, Output};
-/// use embassy_rp::spi::{self, Spi};
-/// use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-/// use embassy_time::Delay;
-/// use epd_waveshare_async::{EpdHw, Error as EpdError};
-/// use thiserror::Error as ThisError;
-///
-/// /// Define an error type that can convert from the SPI and GPIO errors.
-/// #[derive(Debug, ThisError)]
-/// enum Error {
-///   #[error("SPI error: {0:?}")]
-///   SpiError(SpiDeviceError<spi::Error, Infallible>),
-///   #[error("Display error: {0:?}")]
-///   DisplayError(EpdError),
-/// }
-///
-/// impl From<Infallible> for Error {
-///     fn from(_: Infallible) -> Self {
-///         // GPIO errors are infallible, i.e. they can't occur, so this should be unreachable.
-///         unreachable!()
-///     }
-/// }
-///
-/// impl From<SpiDeviceError<spi::Error, Infallible>> for Error {
-///     fn from(e: SpiDeviceError<spi::Error, Infallible>) -> Self {
-///         Error::SpiError(e)
-///     }
-/// }
-///
-/// impl From<EpdError> for Error {
-///     fn from(e: EpdError) -> Self {
-///         Error::DisplayError(e)
-///     }
-/// }
-///
-/// struct RpEpdHw<'a, SPI: spi::Instance + 'a> {
-///     dc: Output<'a>,
-///     reset: Output<'a>,
-///     busy: Input<'a>,
-///     delay: Delay,
-///     _phantom: core::marker::PhantomData<SPI>,
-/// }
-///
-/// impl <'a, SPI: spi::Instance + 'a> EpdHw for RpEpdHw<'a, SPI> {
-///     type Spi = SpiDevice<'a, CriticalSectionRawMutex, Spi<'a, SPI, spi::Async>, Output<'a>>;
-///     type Dc = Output<'a>;
-///     type Reset = Output<'a>;
-///     type Busy = Input<'a>;
-///     type Delay = Delay;
-///     type Error = Error;
-///
-///     fn dc(&mut self) -> &mut Self::Dc {
-///       &mut self.dc
-///     }
-///
-///     fn reset(&mut self) -> &mut Self::Reset {
-///       &mut self.reset
-///     }
-///
-///     fn busy(&mut self) -> &mut Self::Busy {
-///       &mut self.busy
-///     }
-///
-///     fn delay(&mut self) -> &mut Self::Delay {
-///       &mut self.delay
-///     }
-/// }
-/// ```
-pub trait EpdHw {
+/// Drivers rely on this trait to provide a single Error type that supports [From] conversions
+/// from all the hardware-specific error types.
+pub trait ErrorHw {
+    type Error;
+}
+
+/// Describes the SPI hardware to use for interacting with the EPD.
+pub trait SpiHw {
     type Spi: SpiDevice;
+}
+
+/// Provides access to the Data/Command pin for EPD control.
+pub trait DcHw {
     type Dc: OutputPin;
-    type Reset: OutputPin;
-    type Busy: InputPin + Wait;
-    type Delay: DelayNs;
-    type Error: CoreError
-        + From<<Self::Spi as SpiErrorType>::Error>
-        + From<<Self::Dc as PinErrorType>::Error>
-        + From<<Self::Reset as PinErrorType>::Error>
-        + From<<Self::Busy as PinErrorType>::Error>
-        + From<crate::Error>;
 
     fn dc(&mut self) -> &mut Self::Dc;
+}
+
+/// Provides access to the Reset pin for EPD control.
+pub trait ResetHw {
+    type Reset: OutputPin;
+
     fn reset(&mut self) -> &mut Self::Reset;
+}
+
+/// Provides access to the Busy pin for EPD status monitoring.
+pub trait BusyHw {
+    type Busy: InputPin + Wait;
+
     fn busy(&mut self) -> &mut Self::Busy;
+
+    /// Indicates which state of the busy pin indicates that it's busy.
+    ///
+    /// This is user-configurable, rather than enforced by the display driver, to allow the user to
+    /// use more unexpected wiring configurations.
+    fn busy_when(&self) -> embedded_hal::digital::PinState;
+}
+
+/// Provides access to delay functionality for EPD timing control.
+pub trait DelayHw {
+    type Delay: DelayNs;
+
     fn delay(&mut self) -> &mut Self::Delay;
 }
 
 /// Provides "wait" support for hardware with a busy state.
-pub(crate) trait BusyWait: EpdHw {
+pub(crate) trait BusyWait: ErrorHw {
     /// Waits for the current operation to complete if the display is busy.
     ///
     /// Note that this will wait forever if the display is asleep.
@@ -115,33 +62,52 @@ pub(crate) trait BusyWait: EpdHw {
 }
 
 /// Provides the ability to send <command> then <data> style communications.
-pub(crate) trait CommandDataSend: EpdHw {
+pub(crate) trait CommandDataSend: SpiHw + ErrorHw {
     /// Send the following command and data to the display. Waits until the display is no longer busy before sending.
     async fn send(
         &mut self,
-        spi: &mut <Self as EpdHw>::Spi,
+        spi: &mut Self::Spi,
         command: u8,
         data: &[u8],
     ) -> Result<(), Self::Error>;
 }
 
-impl<HW: EpdHw> BusyWait for HW {
+impl<HW> BusyWait for HW
+where
+    HW: BusyHw + ErrorHw,
+    <HW as ErrorHw>::Error: From<<HW::Busy as PinErrorType>::Error>,
+{
     async fn wait_if_busy(&mut self) -> Result<(), HW::Error> {
+        let busy_when = self.busy_when();
         let busy = self.busy();
-        // Note: the datasheet states that busy pin is active low, i.e. we should wait for it when
-        // it's low, but this is incorrect. The sample code treats it as active high, which works.
-        if busy.is_high().unwrap() {
-            trace!("Waiting for busy EPD");
-            busy.wait_for_low().await?;
-        }
+        match busy_when {
+            PinState::High => {
+                if busy.is_high()? {
+                    trace!("Waiting for busy EPD");
+                    busy.wait_for_low().await?;
+                }
+            }
+            PinState::Low => {
+                if busy.is_low()? {
+                    trace!("Waiting for busy EPD");
+                    busy.wait_for_high().await?;
+                }
+            }
+        };
         Ok(())
     }
 }
 
-impl<HW: EpdHw> CommandDataSend for HW {
+impl<HW> CommandDataSend for HW
+where
+    HW: DcHw + BusyHw + BusyWait + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Spi as SpiErrorType>::Error>
+        + From<<HW::Dc as PinErrorType>::Error>
+        + From<<HW::Busy as PinErrorType>::Error>,
+{
     async fn send(
         &mut self,
-        spi: &mut <Self as EpdHw>::Spi,
+        spi: &mut Self::Spi,
         command: u8,
         data: &[u8],
     ) -> Result<(), Self::Error> {
