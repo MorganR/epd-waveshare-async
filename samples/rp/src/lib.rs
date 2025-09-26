@@ -12,7 +12,7 @@ use embassy_rp::Peri;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Delay;
 use embedded_hal::digital::PinState;
-use epd_waveshare_async::{BusyHw, DcHw, DelayHw, ErrorHw, ResetHw, SpiHw};
+use epd_waveshare_async::hw::{BusyHw, DcHw, DelayHw, ErrorHw, ResetHw, SpiHw};
 use thiserror::Error as ThisError;
 use {defmt_rtt as _, panic_probe as _};
 

@@ -12,9 +12,9 @@ use embedded_hal_async::delay::DelayNs;
 
 use crate::{
     buffer::{binary_buffer_length, split_low_and_high, BinaryBuffer, BufferView},
-    hw::{BusyHw, DcHw, DelayHw, ErrorHw, ResetHw},
+    hw::{BusyHw, DcHw, DelayHw, ErrorHw, ResetHw, SpiHw},
     log::{debug, debug_assert},
-    DisplayPartial, DisplaySimple, Displayable, Reset, Sleep, SpiHw, Wake,
+    DisplayPartial, DisplaySimple, Displayable, Reset, Sleep, Wake,
 };
 
 /// LUT for a full refresh. This should be used occasionally for best display results.
@@ -231,6 +231,8 @@ impl<W: StateAwake> State for StateAsleep<W> {}
 /// * [sample code](https://github.com/waveshareteam/e-Paper/blob/master/RaspberryPi_JetsonNano/python/lib/waveshare_epd/epd2in9.py)
 ///
 /// The display has a portrait orientation. This uses [BinaryColor], where `Off` is black and `On` is white.
+///
+/// HW should implement [ResetHw], [BusyHw], [DcHw], [SpiHw], [DelayHw], and [ErrorHw].
 pub struct Epd2In9<HW, STATE> {
     hw: HW,
     state: STATE,
@@ -310,8 +312,8 @@ where
         + From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
         + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
 {
-    /// Sets the border to the specified colour. You need to call [Epd::update_display] using
-    /// [RefreshMode::Full] afterwards to apply this change.
+    /// Sets the border to the specified colour. You need to call [Displayable::update_display]
+    /// using [RefreshMode::Full] afterwards to apply this change.
     ///
     /// Note: on my board, the white setting fades to grey fairly quickly. I have not found a way
     /// to avoid this.

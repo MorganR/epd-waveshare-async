@@ -252,7 +252,7 @@ pub enum Command {
     /// [Command::DisplayUpdateControl2].
     LoadWsOtp = 0x31,
 
-    /// Writes the LUT register (153 bytes, containing VS[nX-LUTm], TP[nX], RP[n], SR[nXY], FR[n], and XON[nXY]).
+    /// Writes the LUT register (153 bytes, containing VS\[nX-LUTm\], TP\[nX\], RP\[n\], SR\[nXY\], FR\[n\], and XON\[nXY\]).
     WriteLut = 0x32,
 
     /// ?? Programs OTP selection according to the OTP selection control (registers 0x37 and 0x38).
@@ -331,6 +331,8 @@ const DRIVER_OUTPUT_INIT_DATA: [u8; 3] = [0x27, 0x01, 0x00];
 /// depending on the display mode.
 ///
 /// When using `BinaryColor`, `Off` is black and `On` is white.
+///
+/// HW should implement [ResetHw], [BusyHw], [DcHw], [SpiHw], [DelayHw], and [ErrorHw].
 pub struct Epd2In9V2<HW, STATE> {
     hw: HW,
     state: STATE,

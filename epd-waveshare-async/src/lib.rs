@@ -7,11 +7,13 @@
 //!
 //! ### Hardware
 //!
-//! The use must implement the [`EpdHw`] trait for their hardware. This trait abstracts over the
-//! underlying hardware components required to control an E-Paper display, including SPI
-//! communication, GPIO pins (for Data/Command, Reset, and Busy and a delay timer. You need to
-//! implement this trait for your chosen peripherals. This trades off some set up code (implementing
-//! this trait), for simple type signatures with fewer generic parameters.
+//! The user must implement the `XHw` traits for their hardware that are needed by their display.
+//! These traits abstract over common hardware functionality that displays need, like SPI
+//! communication, GPIO pins (for Data/Command, Reset, and Busy) and a delay timer. You need to
+//! implement these traits for your chosen peripherals. This trades off some set up code (
+//! implementing these traits), for simple type signatures with fewer generic parameters.
+//!
+//! See the [crate::hw] module for more.
 //!
 //! ### Functionality
 //!
@@ -38,12 +40,123 @@ use embedded_hal_async::spi::SpiDevice;
 pub mod buffer;
 pub mod epd2in9;
 pub mod epd2in9_v2;
+/// This module provides hardware abstraction traits that can be used by display drivers.
+/// You should implement all the traits on a single struct, so that you can pass this one
+/// hardware struct to your display driver.
+///
+/// Example that remains generic over the specific SPI bus:
+///
+/// ```
+/// # use core::convert::Infallible;
+/// # use core::marker::PhantomData;
+/// use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice as EmbassySpiDevice;
+/// use embassy_embedded_hal::shared_bus::SpiDeviceError;
+/// use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
+/// use embassy_rp::spi;
+/// use embassy_rp::Peri;
+/// use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+/// use embedded_hal::digital::PinState;
+/// use epd_waveshare_async::hw::{BusyHw, DcHw, DelayHw, ErrorHw, ResetHw, SpiHw};
+/// use thiserror::Error as ThisError;
+///
+/// /// Defines the hardware to use for connecting to the display.
+/// pub struct DisplayHw<'a, SPI> {
+///     dc: Output<'a>,
+///     reset: Output<'a>,
+///     busy: Input<'a>,
+///     delay: embassy_time::Delay,
+///     _spi_type: PhantomData<SPI>,
+/// }
+///
+/// impl<'a, SPI: spi::Instance> DisplayHw<'a, SPI> {
+///     pub fn new<DC: Pin, RESET: Pin, BUSY: Pin>(
+///         dc: Peri<'a, DC>,
+///         reset: Peri<'a, RESET>,
+///         busy: Peri<'a, BUSY>,
+///     ) -> Self {
+///         let dc = Output::new(dc, Level::High);
+///         let reset = Output::new(reset, Level::High);
+///         let busy = Input::new(busy, Pull::Up);
+///
+///         Self {
+///             dc,
+///             reset,
+///             busy,
+///             delay: embassy_time::Delay,
+///             _spi_type: PhantomData,
+///         }
+///     }
+/// }
+///
+/// impl<'a, SPI> ErrorHw for DisplayHw<'a, SPI> {
+///     type Error = Error;
+/// }
+///
+/// impl<'a, SPI> DcHw for DisplayHw<'a, SPI> {
+///     type Dc = Output<'a>;
+///
+///     fn dc(&mut self) -> &mut Self::Dc {
+///         &mut self.dc
+///     }
+/// }
+///
+/// impl<'a, SPI> ResetHw for DisplayHw<'a, SPI> {
+///     type Reset = Output<'a>;
+///
+///     fn reset(&mut self) -> &mut Self::Reset {
+///         &mut self.reset
+///     }
+/// }
+///
+/// impl<'a, SPI> BusyHw for DisplayHw<'a, SPI> {
+///     type Busy = Input<'a>;
+///
+///     fn busy(&mut self) -> &mut Self::Busy {
+///         &mut self.busy
+///     }
+///
+///     fn busy_when(&self) -> embedded_hal::digital::PinState {
+///         epd_waveshare_async::epd2in9::DEFAULT_BUSY_WHEN
+///     }
+/// }
+///
+/// impl<'a, SPI> DelayHw for DisplayHw<'a, SPI> {
+///     type Delay = embassy_time::Delay;
+///
+///     fn delay(&mut self) -> &mut Self::Delay {
+///         &mut self.delay
+///     }
+/// }
+///
+/// impl<'a, SPI: spi::Instance + 'a> SpiHw for DisplayHw<'a, SPI> {
+///     type Spi = EmbassySpiDevice<'a, NoopRawMutex, spi::Spi<'a, SPI, spi::Async>, Output<'a>>;
+/// }
+///
+/// type RawSpiError = SpiDeviceError<spi::Error, Infallible>;
+///
+/// #[derive(Debug, ThisError)]
+/// pub enum Error {
+///     #[error("SPI error: {0:?}")]
+///     SpiError(RawSpiError),
+/// }
+///
+/// impl From<Infallible> for Error {
+///     fn from(_: Infallible) -> Self {
+///         unreachable!()
+///     }
+/// }
+///
+/// impl From<RawSpiError> for Error {
+///     fn from(e: RawSpiError) -> Self {
+///         Error::SpiError(e)
+///     }
+/// }
+/// ```
+pub mod hw;
 
-mod hw;
 mod log;
 
 use crate::buffer::BufferView;
-pub use crate::hw::{BusyHw, DcHw, DelayHw, ErrorHw, ResetHw, SpiHw};
 
 /// Displays that have a hardware reset.
 pub trait Reset<ERROR> {
@@ -71,22 +184,14 @@ pub trait Wake<SPI: SpiDevice, ERROR> {
 
 /// Base trait for any display where the display can be updated separate from its framebuffer data.
 pub trait Displayable<SPI: SpiDevice, ERROR> {
-    /// Updates (refreshes) the display based on what has been written to RAM. Note that this can be
-    /// stateful, for example displays in [DisplayPartial] mode often swap two underlying
-    /// framebuffers on calls to this method, resulting in the following behaviour:
-    ///
-    /// 1. [DisplayPartial::write_diff_framebuffer] is used to turn the RAM all white.
-    /// 2. [Displayable::update_display] is called, which refreshes the display to be all white.
-    /// 3. [DisplayPartial::write_diff_framebuffer] is used to turn the RAM all black.
-    /// 4. [Displayable::update_display] is called, which refreshes the display to be all black.
-    /// 5. [Displayable::update_display] is called again, which refreshes the display to be all white again.
+    /// Updates (refreshes) the display based on what has been written to the framebuffer.
     async fn update_display(&mut self, spi: &mut SPI) -> Result<(), ERROR>;
 }
 
 /// Simple displays that support writing and displaying framebuffers of a certain bit configuration.
 ///
 /// `BITS` indicates the colour depth of each frame, and `FRAMES` indicates the total number of frames that
-/// represent a complete image. For example, some 4-colour greyscale displays accept data as two
+/// represent a complete image. For example, some 4-colour greyscale display might accept data as two
 /// separate 1-bit frames instead of one frame of 2-bit pixels. This distinction is exposed so that
 /// framebuffers can be written directly to displays without temp copies or transformations.
 pub trait DisplaySimple<const BITS: usize, const FRAMES: usize, SPI: SpiDevice, ERROR>:
