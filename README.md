@@ -2,6 +2,8 @@
 
 ![build-status](https://github.com/MorganR/epd-waveshare-async/actions/workflows/build.yaml/badge.svg?branch=main&event=push)
 
+[docs.rs](https://docs.rs/epd-waveshare-async/latest/epd_waveshare_async/)
+
 Async drivers for Waveshare's e-paper displays.
 
 This is inspired by both the existing (sync) [epd-waveshare](https://github.com/caemor/epd-waveshare)
@@ -10,6 +12,8 @@ Waveshare directly.
 
 However, it diverges significantly in the public interface for the displays, with a focus on
 **clarity, correctness, and flexibility**.
+
+## [Changelog](./CHANGELOG.md)
 
 ## Drivers
 
