@@ -10,7 +10,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Morgan Roff"]
-version = "0.2.1-alpha"
+version = "0.3.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/MorganR/epd-waveshare-async"
@@ -34,8 +34,8 @@ embedded-hal = "1.0"
 embedded-hal-async = "1.0"
 
 # Dev dependencies
-embassy-embedded-hal = { version = "0.3", features = ["defmt"] }
-embassy-rp = { version = "0.6", features = ["chrono", "defmt", "unstable-pac", "time-driver", "critical-section-impl", "boot2-w25q080", "rp2040", "rom-v2-intrinsics"] }
+embassy-embedded-hal = { version = "0.5", features = ["defmt"] }
+embassy-rp = { version = "0.8", features = ["chrono", "defmt", "unstable-pac", "time-driver", "critical-section-impl", "boot2-w25q080", "rp2040", "rom-v2-intrinsics"] }
 embassy-sync = "0.7"
-embassy-time = { version = "0.4", features = ["defmt", "defmt-timestamp-uptime-s"] }
+embassy-time = { version = "0.5", features = ["defmt", "defmt-timestamp-uptime-s"] }
 thiserror = { version = "2.0", default-features = false }

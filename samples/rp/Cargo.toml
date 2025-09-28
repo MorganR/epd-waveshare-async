@@ -8,8 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-embassy-embedded-hal = { version = "0.4", features = ["defmt"] }
-embassy-executor = { version = "0.7", features = ["arch-cortex-m", "executor-thread", "executor-interrupt"] }
+embassy-embedded-hal = { version = "0.5", features = ["defmt"] }
+embassy-executor = { version = "0.9", features = ["arch-cortex-m", "executor-thread", "executor-interrupt"] }
 embassy-rp = { workspace = true, features = ["chrono", "defmt", "unstable-pac", "time-driver", "critical-section-impl", "boot2-w25q080", "rp2040", "rom-v2-intrinsics"] }
 
 defmt-rtt = "1.0"
