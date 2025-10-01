@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.1
+
+- Add `FullSlow` refresh mode to `epd2in9_v2`.
+
 ## v0.3.0
 
 - Split `EpdHw` into separate traits to support drivers that require different hardware configurations (e.g. the 7" display requires control of an extra power pin).

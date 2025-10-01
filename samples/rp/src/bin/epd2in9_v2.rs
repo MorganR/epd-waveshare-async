@@ -101,6 +101,10 @@ async fn main(_spawner: Spawner) {
     // Clear the base image for later partial refresh.
     epd.write_base_framebuffer(&mut spi, &buffer).await.unwrap();
 
+    epd.set_refresh_mode(&mut spi, RefreshMode::FullSlow)
+        .await
+        .unwrap();
+
     info!("Displaying text");
     let mut text_style = TextStyle::default();
     text_style.alignment = Alignment::Left;
@@ -117,7 +121,7 @@ async fn main(_spawner: Spawner) {
         epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to display text buffer"
     );
-    Timer::after_secs(4).await;
+    Timer::after_secs(5).await;
 
     info!("Changing to partial refresh mode");
     expect!(
@@ -293,7 +297,7 @@ async fn main(_spawner: Spawner) {
         .unwrap();
 
     info!("Final clear");
-    epd.set_refresh_mode(&mut spi, RefreshMode::Full)
+    epd.set_refresh_mode(&mut spi, RefreshMode::FullSlow)
         .await
         .unwrap();
     buffer.clear(BinaryColor::On).unwrap();
@@ -302,6 +306,7 @@ async fn main(_spawner: Spawner) {
         epd.display_framebuffer(&mut spi, &buffer).await,
         "Failed to clear display"
     );
+    Timer::after_secs(4).await;
 
     let _epd = expect!(epd.sleep(&mut spi).await, "Failed to put EPD to sleep");
     info!("Done");

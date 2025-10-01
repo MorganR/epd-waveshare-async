@@ -18,9 +18,23 @@ use crate::{
     DisplayPartial, DisplaySimple, Displayable, Reset, Sleep, Wake,
 };
 
-/// LUT for a full refresh. This should be used occasionally for best display results.
-///
-/// See [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] and [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
+const LUT_FULL_SLOW_UPDATE: [u8; 153] = [
+    0x80, 0x66, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x40, 0x0, 0x0, 0x0, 0x10, 0x66, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x20, 0x0, 0x0, 0x0, 0x80, 0x66, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x40, 0x0, 0x0, 0x0,
+    0x10, 0x66, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x20, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x14, 0x8, 0x0, 0x0, 0x0, 0x0, 0x2, 0xA, 0xA, 0x0, 0xA, 0xA, 0x0,
+    0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x14, 0x8, 0x0, 0x1, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x44, 0x44, 0x44, 0x44,
+    0x44, 0x44, 0x0, 0x0, 0x0,
+    // 0x22,	0x17,	0x41,	0x0,	0x32,	0x36
+];
+const LUT_MAGIC_FULL_SLOW_UPDATE: [u8; 1] = [0x22];
+const GATE_VOLTAGE_FULL_SLOW_UPDATE: [u8; 1] = [0x17];
+const SOURCE_VOLTAGE_FULL_SLOW_UPDATE: [u8; 3] = [0x41, 0x0, 0x32];
+const VCOM_FULL_SLOW_UPDATE: [u8; 1] = [0x36];
+
 const LUT_FULL_UPDATE: [u8; 153] = [
     0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x60, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -37,10 +51,6 @@ const LUT_MAGIC_FULL_UPDATE: [u8; 1] = [0x22];
 const GATE_VOLTAGE_FULL_UPDATE: [u8; 1] = [0x17];
 const SOURCE_VOLTAGE_FULL_UPDATE: [u8; 3] = [0x41, 0xAE, 0x32];
 const VCOM_FULL_UPDATE: [u8; 1] = [0x38];
-/// LUT for a partial refresh. This should be used for frequent updates, but it's recommended to
-/// perform a full refresh occasionally.
-///
-/// See [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] and [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
 const LUT_PARTIAL_UPDATE: [u8; 153] = [
     0x0, 0x40, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x80, 0x80, 0x0, 0x0, 0x0, 0x0,
     0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x40, 0x40, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
@@ -77,11 +87,18 @@ const VCOM_GRAY2: [u8; 1] = [0x28];
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// The refresh mode for the display.
 pub enum RefreshMode {
-    /// Use the full update LUT. This is slower, but should be done occasionally to avoid ghosting.
+    /// Use the full update LUT. This is slower than [RefreshMode::Partial], but should be done
+    /// occasionally to avoid ghosting. If ghosting persists, try [RefreshMode::FullSlow].
     ///
     /// It's recommended to avoid full refreshes less than [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] apart,
     /// but to do a full refresh at least every [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
     Full,
+    /// A slower full update that gives a cleaner final image. This corresponds with the `WS_20_30`
+    /// LUT in the sample code.
+    ///
+    /// It's recommended to avoid full refreshes less than [RECOMMENDED_MIN_FULL_REFRESH_INTERVAL] apart,
+    /// but to do a full refresh at least every [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
+    FullSlow,
     /// Uses the partial update LUT for fast refresh. A full refresh should be done occasionally to
     /// avoid ghosting, see [RECOMMENDED_MAX_FULL_REFRESH_INTERVAL].
     ///
@@ -97,11 +114,12 @@ pub enum RefreshMode {
 
 impl RefreshMode {
     /// Returns the border waveform setting to use for this refresh mode.
-    pub fn border_waveform(&self) -> &[u8] {
+    pub fn border_waveform(&self) -> Option<&[u8]> {
         match self {
-            RefreshMode::Full => &[0x05],
-            RefreshMode::Partial => &[0x80],
-            RefreshMode::Gray2 => &[0x04],
+            RefreshMode::Full => Some(&[0x05]),
+            RefreshMode::FullSlow => None,
+            RefreshMode::Partial => Some(&[0x80]),
+            RefreshMode::Gray2 => Some(&[0x04]),
         }
     }
 
@@ -109,6 +127,7 @@ impl RefreshMode {
     pub fn lut(&self) -> &[u8] {
         match self {
             RefreshMode::Full => &LUT_FULL_UPDATE,
+            RefreshMode::FullSlow => &LUT_FULL_SLOW_UPDATE,
             RefreshMode::Partial => &LUT_PARTIAL_UPDATE,
             RefreshMode::Gray2 => &LUT_GRAY2,
         }
@@ -117,6 +136,7 @@ impl RefreshMode {
     pub fn lut_magic(&self) -> &[u8] {
         match self {
             RefreshMode::Full => &LUT_MAGIC_FULL_UPDATE,
+            RefreshMode::FullSlow => &LUT_MAGIC_FULL_SLOW_UPDATE,
             RefreshMode::Partial => &LUT_MAGIC_PARTIAL_UPDATE,
             RefreshMode::Gray2 => &LUT_MAGIC_GRAY2,
         }
@@ -125,6 +145,7 @@ impl RefreshMode {
     pub fn gate_voltage(&self) -> &[u8] {
         match self {
             RefreshMode::Full => &GATE_VOLTAGE_FULL_UPDATE,
+            RefreshMode::FullSlow => &GATE_VOLTAGE_FULL_SLOW_UPDATE,
             RefreshMode::Partial => &GATE_VOLTAGE_PARTIAL_UPDATE,
             RefreshMode::Gray2 => &GATE_VOLTAGE_GRAY2,
         }
@@ -133,6 +154,7 @@ impl RefreshMode {
     pub fn source_voltage(&self) -> &[u8] {
         match self {
             RefreshMode::Full => &SOURCE_VOLTAGE_FULL_UPDATE,
+            RefreshMode::FullSlow => &SOURCE_VOLTAGE_FULL_SLOW_UPDATE,
             RefreshMode::Partial => &SOURCE_VOLTAGE_PARTIAL_UPDATE,
             RefreshMode::Gray2 => &SOURCE_VOLTAGE_GRAY2,
         }
@@ -141,6 +163,7 @@ impl RefreshMode {
     pub fn vcom(&self) -> &[u8] {
         match self {
             RefreshMode::Full => &VCOM_FULL_UPDATE,
+            RefreshMode::FullSlow => &VCOM_FULL_SLOW_UPDATE,
             RefreshMode::Partial => &VCOM_PARTIAL_UPDATE,
             RefreshMode::Gray2 => &VCOM_GRAY2,
         }
@@ -492,8 +515,10 @@ where
         )
         .await?;
 
-        self.send(spi, Command::SetBorderWaveform, mode.border_waveform())
-            .await?;
+        if let Some(border_waveform) = mode.border_waveform() {
+            self.send(spi, Command::SetBorderWaveform, border_waveform)
+                .await?;
+        }
 
         self.send(spi, Command::WriteLut, mode.lut()).await?;
         self.send(spi, Command::SetLutMagic, mode.lut_magic())
