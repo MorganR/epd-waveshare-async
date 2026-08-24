@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.2
+
+- Add 7.5" V2 driver (thanks to @SakiiCode)
+- Re-initialise the 2.9" V2 driver when waking from sleep, as Waveshare documents you must.
+
 ## v0.3.1
 
 - Add `FullSlow` refresh mode to `epd2in9_v2`.

@@ -10,7 +10,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Morgan Roff"]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/MorganR/epd-waveshare-async"
@@ -19,7 +19,7 @@ readme = "README.md"
 [profile.release]
 debug = 2
 lto = true
-opt-level = "z" 
+opt-level = "z"
 # Note: could enable codegen-units=1 if we need to reduce the binary size even further
 
 [profile.dev]
