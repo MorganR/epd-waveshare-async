@@ -709,7 +709,7 @@ where
     }
 }
 
-impl<HW, W: StateAwake> Wake<HW::Spi, HW::Error> for Epd2In9V2<HW, StateAsleep<W>>
+impl<HW> Wake<HW::Spi, HW::Error> for Epd2In9V2<HW, StateAsleep<StateUninitialized>>
 where
     HW: BusyHw + DcHw + ResetHw + DelayHw + SpiHw + ErrorHw,
     HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
@@ -717,10 +717,31 @@ where
         + From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>
         + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
 {
-    type DisplayOut = Epd2In9V2<HW, W>;
+    type DisplayOut = Epd2In9V2<HW, StateUninitialized>;
     async fn wake(self, _spi: &mut HW::Spi) -> Result<Self::DisplayOut, HW::Error> {
         debug!("Waking EPD");
+        // No refresh mode has been configured yet, so there's nothing to re-initialise; the
+        // caller is expected to call `init` next.
         self.reset().await
+    }
+}
+
+impl<HW> Wake<HW::Spi, HW::Error> for Epd2In9V2<HW, StateAsleep<StateReady>>
+where
+    HW: BusyHw + DcHw + ResetHw + DelayHw + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
+    type DisplayOut = Epd2In9V2<HW, StateReady>;
+    async fn wake(self, spi: &mut HW::Spi) -> Result<Self::DisplayOut, HW::Error> {
+        debug!("Waking EPD");
+        let mode = self.state.wake_state.mode;
+        let mut epd = self.reset().await?;
+        // Deep sleep clears the display's configuration registers, so they must be resent.
+        epd.set_refresh_mode_impl(spi, mode).await?;
+        Ok(epd)
     }
 }
 
