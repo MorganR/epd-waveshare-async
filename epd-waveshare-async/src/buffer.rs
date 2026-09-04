@@ -197,7 +197,7 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
         let x_start = drawable_area.top_left.x;
         let x_end = drawable_area.top_left.x + drawable_area.size.width as i32;
 
-        let x_full_bytes_start = min(x_start + x_start % 8, x_end);
+        let x_full_bytes_start = min((x_start + 7) & !7, x_end);
         let x_full_bytes_end = max(x_end - (x_end % 8), x_start);
         let num_full_bytes_per_row = (x_full_bytes_end - x_full_bytes_start) / 8;
 
@@ -694,6 +694,38 @@ mod tests {
             0b00000000, 0b00000000, 0b00001111,
         ];
         assert_eq!(buffer.data(), &expected);
+    }
+
+    #[test]
+    fn test_binary_buffer_fill_solid_matches_draw_iter() {
+        // Tries a lot of start and width combinations (aligned and unaligned, including out of
+        // bounds) and checks that fill_solid produces the same result as setting each
+        // pixel individually with draw_iter.
+        const SIZE: Size = Size::new(24, 4);
+        const BUFFER_LENGTH: usize = binary_buffer_length(SIZE);
+        const MAX_PIXELS: usize = 2 * 32;
+
+        for color in [BinaryColor::On, BinaryColor::Off] {
+            for x_start in -4..28 {
+                for width in 0u32..=32 {
+                    let area = Rectangle::new(Point::new(x_start, 1), Size::new(width, 2));
+
+                    let mut fast = BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE);
+                    fast.fill_solid(&area, color).unwrap();
+
+                    let mut reference = BinaryBuffer::<{ BUFFER_LENGTH }>::new(SIZE);
+                    let mut pixels: Vec<Pixel<BinaryColor>, MAX_PIXELS> = Vec::new();
+                    for y in 1..3 {
+                        for x in x_start..x_start + width as i32 {
+                            pixels.push(Pixel(Point::new(x, y), color)).unwrap();
+                        }
+                    }
+                    reference.draw_iter(pixels).unwrap();
+
+                    assert_eq!(fast.data, reference.data);
+                }
+            }
+        }
     }
 
     #[test]
