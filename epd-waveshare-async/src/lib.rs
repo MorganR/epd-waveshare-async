@@ -40,6 +40,7 @@ use embedded_hal_async::spi::SpiDevice;
 pub mod buffer;
 pub mod epd2in9;
 pub mod epd2in9_v2;
+pub mod epd4in2_v2;
 pub mod epd7in5_v2;
 /// This module provides hardware abstraction traits that can be used by display drivers.
 /// You should implement all the traits on a single struct, so that you can pass this one
