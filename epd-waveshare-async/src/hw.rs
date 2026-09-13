@@ -118,7 +118,7 @@ where
         command: u8,
         data: &[u8],
     ) -> Result<(), Self::Error> {
-        trace!("Sending EPD command: 0x{:02x}", command);
+        trace!("Sending EPD command: 0x{:02X}", command);
         self.wait_if_busy().await?;
 
         self.dc().set_low()?;

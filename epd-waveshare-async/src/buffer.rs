@@ -1,10 +1,11 @@
 use core::{
     cmp::{max, min},
     convert::Infallible,
+    ptr::NonNull,
 };
 
 use embedded_graphics::{
-    pixelcolor::{BinaryColor, Gray2},
+    pixelcolor::{BinaryColor, Gray2, Rgb888, RgbColor},
     prelude::{Dimensions, DrawTarget, GrayColor, Point, Size},
     primitives::Rectangle,
     Pixel,
@@ -62,6 +63,26 @@ impl<const L: usize> BinaryBuffer<L> {
             bytes_per_row: dimensions.width as usize / 8,
             size: dimensions,
             data: [0; L],
+        }
+    }
+
+    /// In-place initializes the fields of a BinaryBuffer object that has been allocated but not initialized.
+    pub fn init(mut uninit: NonNull<Self>, dimensions: Size) {
+        assert!(
+            dimensions.width % 8 == 0,
+            "Width must be a multiple of 8 for binary packing."
+        );
+        assert!(
+            binary_buffer_length(dimensions) == L,
+            "Size must match given dimensions"
+        );
+
+        unsafe {
+            let uninit = uninit.as_mut();
+
+            uninit.bytes_per_row = dimensions.width as usize / 8;
+            uninit.size = dimensions;
+            uninit.data.fill(0);
         }
     }
 
@@ -261,6 +282,200 @@ impl<const L: usize> DrawTarget for BinaryBuffer<L> {
     }
 }
 
+/// For the 6 Color Displays
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum HexColor {
+    /// Black Color
+    Black = 0x00,
+    /// White Color
+    #[default]
+    White = 0x01,
+    /// Yellow Color
+    Yellow = 0x02,
+    /// Red Color
+    Red = 0x03,
+    /// Blue Color
+    Blue = 0x05,
+    /// Green Color
+    Green = 0x06,
+}
+
+impl HexColor {
+    pub fn bits(self) -> u8 {
+        self as u8
+    }
+
+    /// Converts to limited range of RGB values.
+    pub fn rgb(self) -> (u8, u8, u8) {
+        match self {
+            HexColor::White => (0xff, 0xff, 0xff),
+            HexColor::Black => (0x00, 0x00, 0x00),
+            HexColor::Green => (0x00, 0xff, 0x00),
+            HexColor::Blue => (0x00, 0x00, 0xff),
+            HexColor::Red => (0xff, 0x00, 0x00),
+            HexColor::Yellow => (0xff, 0xff, 0x00),
+        }
+    }
+}
+
+impl From<Rgb888> for HexColor {
+    fn from(p: Rgb888) -> HexColor {
+        let colors = [
+            HexColor::Black,
+            HexColor::White,
+            HexColor::Yellow,
+            HexColor::Red,
+            HexColor::Blue,
+            HexColor::Green,
+        ];
+        // if the user has already mapped to the right color space, it will just be in the list
+        if let Some(found) = colors.iter().find(|c| c.rgb() == (p.r(), p.g(), p.b())) {
+            return *found;
+        }
+
+        // This is not ideal but just pick the nearest color
+        *colors
+            .iter()
+            .map(|c| (c, c.rgb()))
+            .map(|(c, (r, g, b))| {
+                let dist = (i32::from(r) - i32::from(p.r())).pow(2)
+                    + (i32::from(g) - i32::from(p.g())).pow(2)
+                    + (i32::from(b) - i32::from(p.b())).pow(2);
+                (c, dist)
+            })
+            .min_by_key(|(_c, dist)| *dist)
+            .map(|(c, _)| c)
+            .unwrap_or(&HexColor::White)
+    }
+}
+
+impl From<HexColor> for Rgb888 {
+    fn from(value: HexColor) -> Self {
+        let rgb = value.rgb();
+        Rgb888::new(rgb.0, rgb.1, rgb.2)
+    }
+}
+
+/// A compact buffer for storing 6-coloured display data.
+///
+/// This buffer packs the data such that each byte represents 2 pixels.
+#[derive(Clone)]
+pub struct HexBuffer<const L: usize> {
+    size: Size,
+    bytes_per_row: usize,
+    // Data rounds the length of each row up to the next whole byte.
+    data: [u8; L],
+}
+
+/// Computes the correct size for the binary buffer based on the given dimensions.
+pub const fn hex_buffer_length(size: Size) -> usize {
+    (size.width as usize / 2) * size.height as usize
+}
+
+impl<const L: usize> HexBuffer<L> {
+    /// Creates a new [HexBuffer] with all pixels set to `HexColor::Black`.
+    ///
+    /// The dimensions must match the buffer length `L`, and the width must be a multiple of 2.
+    ///
+    /// ```
+    /// use embedded_graphics::prelude::Size;
+    /// use epd_waveshare_async::buffer::{hex_buffer_length, HexBuffer};
+    ///
+    /// const DIMENSIONS: Size = Size::new(8, 8);
+    /// let buffer = HexBuffer::<{hex_buffer_length(DIMENSIONS)}>::new(DIMENSIONS);
+    /// ```
+    pub const fn new(dimensions: Size) -> Self {
+        assert!(
+            dimensions.width % 2 == 0,
+            "Width must be a multiple of 2 for binary packing."
+        );
+        assert!(
+            hex_buffer_length(dimensions) == L,
+            "Size must match given dimensions"
+        );
+
+        Self {
+            bytes_per_row: dimensions.width as usize / 2,
+            size: dimensions,
+            data: [0; L],
+        }
+    }
+
+    /// In-place initializes the fields of a HexBuffer object that has been allocated but not initialized.
+    pub fn init(mut uninit: NonNull<Self>, dimensions: Size) {
+        assert!(
+            dimensions.width % 2 == 0,
+            "Width must be a multiple of 2 for binary packing."
+        );
+        assert!(
+            hex_buffer_length(dimensions) == L,
+            "Size must match given dimensions"
+        );
+
+        unsafe {
+            let uninit = uninit.as_mut();
+
+            uninit.bytes_per_row = dimensions.width as usize / 2;
+            uninit.size = dimensions;
+            uninit.data.fill(0);
+        }
+    }
+
+    /// Access the packed buffer data.
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+impl<const L: usize> BufferView<1, 1> for HexBuffer<L> {
+    fn window(&self) -> Rectangle {
+        Rectangle::new(Point::zero(), self.size)
+    }
+
+    fn data(&self) -> [&[u8]; 1] {
+        [self.data()]
+    }
+}
+
+impl<const L: usize> Dimensions for HexBuffer<L> {
+    fn bounding_box(&self) -> Rectangle {
+        Rectangle::new(Point::zero(), self.size)
+    }
+}
+
+impl<const L: usize> DrawTarget for HexBuffer<L> {
+    type Color = Rgb888;
+
+    type Error = Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        // Benchmarking: 60ms for checker pattern in epd2in9 sample program.
+        for Pixel(point, color) in pixels.into_iter() {
+            if point.x < 0
+                || point.x >= self.size.width as i32
+                || point.y < 0
+                || point.y >= self.size.height as i32
+            {
+                continue; // Skip out-of-bounds pixels
+            }
+
+            let byte_index = (point.x as usize) / 2 + (point.y as usize * self.bytes_per_row);
+
+            // copy-pasted from epd-waveshare
+            let pos = point.x;
+            let mask = !(0xF0 >> ((pos % 2) * 4));
+            let bits = HexColor::from(color).bits() as u16;
+            let bits = if pos % 2 == 1 { bits } else { bits << 4 };
+
+            self.data[byte_index] = self.data[byte_index] & mask | bits as u8;
+        }
+        Ok(())
+    }
+}
+
 /// A buffer supporting 2-bit grayscale colours. This buffer splits the 2 bits into two separate single-bit framebuffers.
 #[derive(Clone)]
 pub struct Gray2SplitBuffer<const L: usize> {
@@ -289,6 +504,25 @@ impl<const L: usize> Gray2SplitBuffer<L> {
         Self {
             low: BinaryBuffer::new(dimensions),
             high: BinaryBuffer::new(dimensions),
+        }
+    }
+
+    /// In-place initializes the fields of a Gray2SplitBuffer object that has been allocated but not initialized.
+    pub fn init(mut uninit: NonNull<Self>, dimensions: Size) {
+        assert!(
+            dimensions.width % 8 == 0,
+            "Width must be a multiple of 8 for binary packing."
+        );
+        assert!(
+            binary_buffer_length(dimensions) == L,
+            "Size must match given dimensions"
+        );
+
+        unsafe {
+            let uninit = uninit.as_mut();
+
+            BinaryBuffer::init(NonNull::new(&raw mut uninit.low).unwrap(), dimensions);
+            BinaryBuffer::init(NonNull::new(&raw mut uninit.high).unwrap(), dimensions);
         }
     }
 }

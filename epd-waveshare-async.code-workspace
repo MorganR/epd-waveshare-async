@@ -1,0 +1,21 @@
+{
+  "folders": [
+    {
+      "name": "epd-waveshare-async",
+      "path": ".",
+    },
+    {
+      "name": "rp",
+      "path": "samples/rp",
+    },
+    {
+      "name": "rp2350",
+      "path": "samples/rp2350",
+    },
+    {
+      "name": "esp32s3",
+      "path": "samples/esp32s3",
+    },
+  ],
+  "settings": {},
+}
