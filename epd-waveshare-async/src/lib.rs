@@ -48,6 +48,9 @@ pub mod epd7in5_v2;
 /// Example that remains generic over the specific SPI bus:
 ///
 /// ```
+/// # // rp-pac doesn't build on macOS hosts; see the dev-dependencies in Cargo.toml.
+/// # #[cfg(not(target_os = "macos"))]
+/// # mod example {
 /// # use core::convert::Infallible;
 /// # use core::marker::PhantomData;
 /// use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice as EmbassySpiDevice;
@@ -152,6 +155,7 @@ pub mod epd7in5_v2;
 ///         Error::SpiError(e)
 ///     }
 /// }
+/// # }
 /// ```
 pub mod hw;
 
