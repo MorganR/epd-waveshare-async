@@ -1,0 +1,10 @@
+[target.thumbv7em-none-eabihf]
+runner = ["probe-rs", "run", "--chip", "STM32F303VCTx", "--log-format=oneline"]
+
+[build]
+target = "thumbv7em-none-eabihf" # Cortex-M4F
+
+[env]
+DEFMT_LOG = "info"
+# If more than one debug probe is connected, pick one with its VID:PID from `probe-rs list`.
+# PROBE_RS_PROBE = "1366:1020"
