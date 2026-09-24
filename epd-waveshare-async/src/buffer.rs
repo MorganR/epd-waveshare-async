@@ -1,11 +1,15 @@
 use core::{
     cmp::{max, min},
     convert::Infallible,
+    marker::PhantomData,
 };
 
 use embedded_graphics::{
-    pixelcolor::{BinaryColor, Gray2},
-    prelude::{Dimensions, DrawTarget, GrayColor, Point, Size},
+    pixelcolor::{
+        raw::{RawData, RawU2},
+        BinaryColor, Gray2,
+    },
+    prelude::{Dimensions, DrawTarget, GrayColor, PixelColor, Point, Size},
     primitives::Rectangle,
     Pixel,
 };
@@ -364,6 +368,147 @@ impl<const L: usize> DrawTarget for Gray2SplitBuffer<L> {
         let (low, high) = to_low_and_high_as_binary(color);
         self.low.fill_solid(area, low)?;
         self.high.fill_solid(area, high)?;
+        Ok(())
+    }
+}
+
+/// A compact buffer for 2-bit colours, such as [Gray2] or a four-colour display's palette.
+///
+/// This buffer packs the data such that each byte represents 4 pixels, with the leftmost pixel in
+/// the most significant bits.
+#[derive(Clone)]
+pub struct TwoBitBuffer<const L: usize, C> {
+    size: Size,
+    bytes_per_row: usize,
+    data: [u8; L],
+    _color: PhantomData<C>,
+}
+
+/// Computes the correct size for the [TwoBitBuffer] based on the given dimensions.
+pub const fn two_bit_buffer_length(size: Size) -> usize {
+    (size.width as usize / 4) * size.height as usize
+}
+
+impl<const L: usize, C> TwoBitBuffer<L, C> {
+    /// Creates a new [TwoBitBuffer] with all pixels set to raw value 0.
+    ///
+    /// The dimensions must match the buffer length `L`, and the width must be a multiple of 4.
+    ///
+    /// ```
+    /// use embedded_graphics::pixelcolor::Gray2;
+    /// use embedded_graphics::prelude::Size;
+    /// use epd_waveshare_async::buffer::{two_bit_buffer_length, TwoBitBuffer};
+    ///
+    /// const DIMENSIONS: Size = Size::new(8, 8);
+    /// let buffer = TwoBitBuffer::<{two_bit_buffer_length(DIMENSIONS)}, Gray2>::new(DIMENSIONS);
+    /// ```
+    pub const fn new(dimensions: Size) -> Self {
+        assert!(
+            dimensions.width.is_multiple_of(4),
+            "Width must be a multiple of 4 for 2-bit packing."
+        );
+        assert!(
+            two_bit_buffer_length(dimensions) == L,
+            "Size must match given dimensions"
+        );
+
+        Self {
+            bytes_per_row: dimensions.width as usize / 4,
+            size: dimensions,
+            data: [0; L],
+            _color: PhantomData,
+        }
+    }
+
+    /// Access the packed buffer data.
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// Sets the pixel at (`x`, `y`) to the 2-bit `raw` value. The coordinates must be in bounds.
+    fn set_raw(&mut self, x: usize, y: usize, raw: u8) {
+        let byte_index = y * self.bytes_per_row + x / 4;
+        let shift = 6 - 2 * (x % 4);
+        self.data[byte_index] = (self.data[byte_index] & !(0b11 << shift)) | (raw << shift);
+    }
+}
+
+impl<const L: usize, C> BufferView<2, 1> for TwoBitBuffer<L, C> {
+    fn window(&self) -> Rectangle {
+        Rectangle::new(Point::zero(), self.size)
+    }
+
+    fn data(&self) -> [&[u8]; 1] {
+        [self.data()]
+    }
+}
+
+impl<const L: usize, C> Dimensions for TwoBitBuffer<L, C> {
+    fn bounding_box(&self) -> Rectangle {
+        Rectangle::new(Point::zero(), self.size)
+    }
+}
+
+impl<const L: usize, C> DrawTarget for TwoBitBuffer<L, C>
+where
+    C: PixelColor<Raw = RawU2>,
+    RawU2: From<C>,
+{
+    type Color = C;
+
+    type Error = Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for Pixel(point, color) in pixels.into_iter() {
+            if point.x < 0
+                || point.x >= self.size.width as i32
+                || point.y < 0
+                || point.y >= self.size.height as i32
+            {
+                continue; // Skip out-of-bounds pixels
+            }
+            self.set_raw(
+                point.x as usize,
+                point.y as usize,
+                RawU2::from(color).into_inner(),
+            );
+        }
+        Ok(())
+    }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        let drawable_area = self.bounding_box().intersection(area);
+        if drawable_area.size.width == 0 || drawable_area.size.height == 0 {
+            return Ok(()); // Nothing to fill
+        }
+
+        let y_start = drawable_area.top_left.y as usize;
+        let y_end = y_start + drawable_area.size.height as usize;
+        let x_start = drawable_area.top_left.x as usize;
+        let x_end = x_start + drawable_area.size.width as usize;
+
+        // Pixels between the aligned bounds cover whole bytes and can be filled a byte at a time.
+        let x_aligned_start = min(x_start.next_multiple_of(4), x_end);
+        let x_aligned_end = max(x_end - x_end % 4, x_aligned_start);
+
+        let raw = RawU2::from(color).into_inner();
+        let byte_pattern = raw * 0b0101_0101;
+
+        for y in y_start..y_end {
+            for x in x_start..x_aligned_start {
+                self.set_raw(x, y, raw);
+            }
+            let row_start = y * self.bytes_per_row;
+            self.data[row_start + x_aligned_start / 4..row_start + x_aligned_end / 4]
+                .fill(byte_pattern);
+            for x in x_aligned_end..x_end {
+                self.set_raw(x, y, raw);
+            }
+        }
+
         Ok(())
     }
 }
@@ -1183,5 +1328,101 @@ mod tests {
         // The old top right is (3, 1), which becomes (1, 0).
         assert_eq!(rotated.top_left, Point::new(1, 0));
         assert_eq!(rotated.size, Size::new(2, 3));
+    }
+
+    #[test]
+    fn test_two_bit_buffer_draw_iter_packs_leftmost_pixel_high() {
+        const SIZE: Size = Size::new(8, 2);
+        let mut buffer = TwoBitBuffer::<{ two_bit_buffer_length(SIZE) }, Gray2>::new(SIZE);
+
+        buffer
+            .draw_iter([
+                Pixel(Point::new(0, 0), Gray2::new(0b11)),
+                Pixel(Point::new(5, 0), Gray2::new(0b10)),
+                Pixel(Point::new(7, 1), Gray2::new(0b01)),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            buffer.data(),
+            &[0b11_00_00_00, 0b00_10_00_00, 0x00, 0b00_00_00_01]
+        );
+    }
+
+    #[test]
+    fn test_two_bit_buffer_draw_iter_out_of_bounds() {
+        const SIZE: Size = Size::new(4, 1);
+        let mut buffer = TwoBitBuffer::<{ two_bit_buffer_length(SIZE) }, Gray2>::new(SIZE);
+
+        buffer
+            .draw_iter([
+                Pixel(Point::new(-1, 0), Gray2::WHITE),
+                Pixel(Point::new(4, 0), Gray2::WHITE),
+                Pixel(Point::new(0, 1), Gray2::WHITE),
+            ])
+            .unwrap();
+
+        assert_eq!(buffer.data(), &[0x00]);
+    }
+
+    #[test]
+    fn test_two_bit_buffer_overwrites_pixels() {
+        const SIZE: Size = Size::new(4, 1);
+        let mut buffer = TwoBitBuffer::<{ two_bit_buffer_length(SIZE) }, Gray2>::new(SIZE);
+
+        buffer.clear(Gray2::WHITE).unwrap();
+        buffer
+            .draw_iter([Pixel(Point::new(1, 0), Gray2::new(0b01))])
+            .unwrap();
+
+        assert_eq!(buffer.data(), &[0b11_01_11_11]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_two_bit_buffer_must_have_aligned_width() {
+        let _ = TwoBitBuffer::<3, Gray2>::new(Size::new(6, 2));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_two_bit_buffer_size_must_match_dimensions() {
+        let _ = TwoBitBuffer::<16, Gray2>::new(Size::new(8, 2));
+    }
+
+    #[test]
+    fn test_two_bit_buffer_fill_solid_matches_draw_iter() {
+        // Tries a lot of start and width combinations (aligned and unaligned, including out of
+        // bounds) and checks that fill_solid produces the same result as setting each
+        // pixel individually with draw_iter.
+        const SIZE: Size = Size::new(12, 4);
+        const BUFFER_LENGTH: usize = two_bit_buffer_length(SIZE);
+        const MAX_PIXELS: usize = 2 * 16;
+
+        for luma in 0..4 {
+            let color = Gray2::new(luma);
+            for x_start in -4..16 {
+                for width in 0u32..=16 {
+                    let area = Rectangle::new(Point::new(x_start, 1), Size::new(width, 2));
+
+                    let mut fast = TwoBitBuffer::<{ BUFFER_LENGTH }, Gray2>::new(SIZE);
+                    fast.fill_solid(&area, color).unwrap();
+
+                    let mut reference = TwoBitBuffer::<{ BUFFER_LENGTH }, Gray2>::new(SIZE);
+                    let mut pixels: Vec<Pixel<Gray2>, MAX_PIXELS> = Vec::new();
+                    for y in 1..3 {
+                        for x in x_start..x_start + width as i32 {
+                            pixels.push(Pixel(Point::new(x, y), color)).unwrap();
+                        }
+                    }
+                    reference.draw_iter(pixels).unwrap();
+
+                    assert_eq!(
+                        fast.data, reference.data,
+                        "x_start {x_start}, width {width}"
+                    );
+                }
+            }
+        }
     }
 }

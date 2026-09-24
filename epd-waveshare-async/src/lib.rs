@@ -40,6 +40,7 @@ use embedded_hal_async::spi::SpiDevice;
 pub mod buffer;
 pub mod epd2in9;
 pub mod epd2in9_v2;
+pub mod epd3in5g;
 pub mod epd7in5_v2;
 /// This module provides hardware abstraction traits that can be used by display drivers.
 /// You should implement all the traits on a single struct, so that you can pass this one
@@ -48,6 +49,9 @@ pub mod epd7in5_v2;
 /// Example that remains generic over the specific SPI bus:
 ///
 /// ```
+/// # // rp-pac doesn't build on macOS hosts; see the dev-dependencies in Cargo.toml.
+/// # #[cfg(not(target_os = "macos"))]
+/// # mod example {
 /// # use core::convert::Infallible;
 /// # use core::marker::PhantomData;
 /// use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice as EmbassySpiDevice;
@@ -152,10 +156,13 @@ pub mod epd7in5_v2;
 ///         Error::SpiError(e)
 ///     }
 /// }
+/// # }
 /// ```
 pub mod hw;
 
 mod log;
+#[cfg(test)]
+mod mock;
 
 use crate::buffer::BufferView;
 

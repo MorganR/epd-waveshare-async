@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add 3.5" (G) driver, a four-colour (black, white, yellow, red) display, with an STM32F3
+  Discovery sample.
+- Add `TwoBitBuffer`, a packed buffer for 2-bit colours.
+- `cargo test` now runs on macOS hosts.
+
 ## v0.3.2
 
 - Add 7.5" V2 driver (thanks to @SakiiCode)
