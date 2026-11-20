@@ -12,8 +12,6 @@ use core::ptr::NonNull;
 
 use defmt::{error, info};
 use embassy_executor::Spawner;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::signal::Signal;
 use embassy_time::{Delay, Timer};
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::geometry::{Point, Size};
@@ -22,7 +20,7 @@ use embedded_graphics::primitives::Rectangle;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use epd_waveshare_async::buffer::{HexBuffer, HexColor};
 use epd_waveshare_async::epd7in3e::{self, Epd7In3E, Epd7In3EBuffer, RefreshMode};
-use epd_waveshare_async::{DisplaySimple, Reset, Sleep};
+use epd_waveshare_async::{DisplaySimple, Sleep};
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output, OutputConfig};
 use esp_hal::spi::master::{Config, Spi};
@@ -121,7 +119,7 @@ async fn main(_spawner: Spawner) -> ! {
             let h = epd7in3e::DISPLAY_HEIGHT/(color_6.len() as u32);
             let y = i as u32 * h;
             let rect = Rectangle::new(Point::new(0, y.cast_signed()), Size::new(w, h));
-            buffer.fill_solid(&rect, Rgb888::from(*color));
+            defmt::expect!(buffer.fill_solid(&rect, Rgb888::from(*color)), "Could not draw rectangle");
         }
     }
 

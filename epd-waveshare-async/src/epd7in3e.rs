@@ -369,7 +369,7 @@ where
         let buf1_value;
         match self.state.mode {
             RefreshMode::Full => {
-                buf1_value = 0xFF;
+                buf1_value = 0x11;
             }
         };
 
@@ -386,7 +386,7 @@ where
     }
 }
 
-impl<HW> DisplaySimple<1, 1, HW::Spi, HW::Error> for Epd7In3E<HW, StateReady>
+impl<HW> DisplaySimple<4, 1, HW::Spi, HW::Error> for Epd7In3E<HW, StateReady>
 where
     HW: BusyHw + DcHw + SpiHw + ErrorHw + DelayHw,
     HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
@@ -396,7 +396,7 @@ where
     async fn display_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
-        buf: &dyn BufferView<1, 1>,
+        buf: &dyn BufferView<4, 1>,
     ) -> Result<(), HW::Error> {
         self.write_framebuffer(spi, buf).await?;
 
@@ -406,7 +406,7 @@ where
     async fn write_framebuffer(
         &mut self,
         spi: &mut HW::Spi,
-        buf: &dyn BufferView<1, 1>,
+        buf: &dyn BufferView<4, 1>,
     ) -> Result<(), HW::Error> {
         let data = buf.data()[0];
         self.send(spi, Command::DataStartTrans1, data).await?;

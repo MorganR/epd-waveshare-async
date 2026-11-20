@@ -1,7 +1,7 @@
 use core::{
     cmp::{max, min},
     convert::Infallible,
-    ptr::NonNull,
+    mem::MaybeUninit,
 };
 
 use embedded_graphics::{
@@ -67,7 +67,7 @@ impl<const L: usize> BinaryBuffer<L> {
     }
 
     /// In-place initializes the fields of a BinaryBuffer object that has been allocated but not initialized.
-    pub fn init(mut uninit: NonNull<Self>, dimensions: Size) {
+    pub fn init(uninit: &mut MaybeUninit<Self>, dimensions: Size) {
         assert!(
             dimensions.width % 8 == 0,
             "Width must be a multiple of 8 for binary packing."
@@ -78,11 +78,9 @@ impl<const L: usize> BinaryBuffer<L> {
         );
 
         unsafe {
-            let uninit = uninit.as_mut();
-
-            uninit.bytes_per_row = dimensions.width as usize / 8;
-            uninit.size = dimensions;
-            uninit.data.fill(0);
+            (*uninit.as_mut_ptr()).bytes_per_row = dimensions.width as usize / 8;
+            (*uninit.as_mut_ptr()).size = dimensions;
+            (*uninit.as_mut_ptr()).data.fill(0);
         }
     }
 
@@ -402,7 +400,7 @@ impl<const L: usize> HexBuffer<L> {
     }
 
     /// In-place initializes the fields of a HexBuffer object that has been allocated but not initialized.
-    pub fn init(mut uninit: NonNull<Self>, dimensions: Size) {
+    pub fn init(uninit: &mut MaybeUninit<Self>, dimensions: Size) {
         assert!(
             dimensions.width % 2 == 0,
             "Width must be a multiple of 2 for binary packing."
@@ -413,11 +411,9 @@ impl<const L: usize> HexBuffer<L> {
         );
 
         unsafe {
-            let uninit = uninit.as_mut();
-
-            uninit.bytes_per_row = dimensions.width as usize / 2;
-            uninit.size = dimensions;
-            uninit.data.fill(0);
+            (*uninit.as_mut_ptr()).bytes_per_row = dimensions.width as usize / 2;
+            (*uninit.as_mut_ptr()).size = dimensions;
+            (*uninit.as_mut_ptr()).data.fill(0);
         }
     }
 
@@ -427,7 +423,7 @@ impl<const L: usize> HexBuffer<L> {
     }
 }
 
-impl<const L: usize> BufferView<1, 1> for HexBuffer<L> {
+impl<const L: usize> BufferView<4, 1> for HexBuffer<L> {
     fn window(&self) -> Rectangle {
         Rectangle::new(Point::zero(), self.size)
     }
@@ -508,7 +504,7 @@ impl<const L: usize> Gray2SplitBuffer<L> {
     }
 
     /// In-place initializes the fields of a Gray2SplitBuffer object that has been allocated but not initialized.
-    pub fn init(mut uninit: NonNull<Self>, dimensions: Size) {
+    pub fn init(uninit: &mut MaybeUninit<Self>, dimensions: Size) {
         assert!(
             dimensions.width % 8 == 0,
             "Width must be a multiple of 8 for binary packing."
@@ -519,10 +515,13 @@ impl<const L: usize> Gray2SplitBuffer<L> {
         );
 
         unsafe {
-            let uninit = uninit.as_mut();
+            (*uninit.as_mut_ptr()).low.bytes_per_row = dimensions.width as usize / 8;
+            (*uninit.as_mut_ptr()).low.size = dimensions;
+            (*uninit.as_mut_ptr()).low.data.fill(0);
 
-            BinaryBuffer::init(NonNull::new(&raw mut uninit.low).unwrap(), dimensions);
-            BinaryBuffer::init(NonNull::new(&raw mut uninit.high).unwrap(), dimensions);
+            (*uninit.as_mut_ptr()).high.bytes_per_row = dimensions.width as usize / 8;
+            (*uninit.as_mut_ptr()).high.size = dimensions;
+            (*uninit.as_mut_ptr()).high.data.fill(0);
         }
     }
 }
