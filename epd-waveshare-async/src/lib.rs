@@ -164,6 +164,10 @@ pub trait Reset<ERROR> {
     type DisplayOut;
 
     /// Hardware resets the display.
+    ///
+    /// This can be called from any state, and always leaves the display uninitialised, as a
+    /// hardware reset clears the display's configuration. The contents of the display's RAM
+    /// should also be considered undefined after a reset.
     async fn reset(self) -> Result<Self::DisplayOut, ERROR>;
 }
 

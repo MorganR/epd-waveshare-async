@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking:** displays now start in a new `StateUnknown`, which only supports `reset()`. Call `reset()` before `init()`. This avoids a double reset, e.g. on display wake.
+- **Breaking:** `reset()` now always returns the display in `StateUninitialized`, from any state, as a hardware reset clears the display's configuration. In practice, I've found this isn't _always_ necessary, but the behaviour is unreliable. Always re-initialising better follows Waveshare's specs and sample code.
+- **Breaking:** `init()` is only available in `StateUninitialized`, and no longer performs its own hardware reset.
+- The 2.9" (v1) driver now re-initialises the display when waking from sleep.
+- Fixed the 7.5" V2 driver not performing a hardware reset when `reset()` is called on a sleeping display.
+
 ## v0.3.2
 
 - Add 7.5" V2 driver (thanks to @SakiiCode)

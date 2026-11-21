@@ -115,6 +115,9 @@ async fn main(_spawner: Spawner) {
         epd7in5_v2::DEFAULT_BUSY_WHEN,
     ));
 
+    info!("Resetting EPD");
+    let epd = expect!(epd.reset().await, "Failed to reset EPD");
+
     info!("Initializing EPD");
     let mut epd = expect!(
         epd.init(&mut spi, RefreshMode::Full).await,

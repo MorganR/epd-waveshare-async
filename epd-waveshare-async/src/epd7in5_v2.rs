@@ -168,6 +168,14 @@ macro_rules! impl_base_state {
     };
 }
 
+/// The display's state is unknown, e.g. on start up, or after something went wrong. The only
+/// valid operation is [Reset::reset].
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateUnknown();
+impl_base_state!(StateUnknown);
+
+/// The display has been hardware reset, and must be initialised with [Epd7In5V2::init].
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StateUninitialized();
@@ -190,6 +198,24 @@ pub struct StateAsleep<W: StateAwake> {
 impl<W: StateAwake> StateInternal for StateAsleep<W> {}
 impl<W: StateAwake> State for StateAsleep<W> {}
 
+impl<HW> Epd7In5V2<HW, StateUnknown>
+where
+    HW: BusyHw + DcHw + ResetHw + DelayHw + SpiHw + ErrorHw,
+    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>
+        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
+{
+    /// Creates a new display in an unknown state. Call [Reset::reset] followed by
+    /// [Epd7In5V2::init] to prepare it for use.
+    pub fn new(hw: HW) -> Self {
+        Epd7In5V2 {
+            hw,
+            state: StateUnknown(),
+        }
+    }
+}
+
 impl<HW> Epd7In5V2<HW, StateUninitialized>
 where
     HW: BusyHw + DcHw + ResetHw + DelayHw + SpiHw + ErrorHw,
@@ -198,31 +224,13 @@ where
         + From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>
         + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
 {
-    pub fn new(hw: HW) -> Self {
-        Epd7In5V2 {
-            hw,
-            state: StateUninitialized(),
-        }
-    }
-}
-
-impl<HW, STATE> Epd7In5V2<HW, STATE>
-where
-    HW: BusyHw + DcHw + ResetHw + DelayHw + SpiHw + ErrorHw,
-    HW::Error: From<<HW::Busy as embedded_hal::digital::ErrorType>::Error>
-        + From<<HW::Dc as embedded_hal::digital::ErrorType>::Error>
-        + From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>
-        + From<<HW::Spi as embedded_hal_async::spi::ErrorType>::Error>,
-    STATE: StateAwake,
-{
-    /// Initialises the display.
+    /// Initialises the display after a [Reset::reset].
     pub async fn init(
-        mut self,
+        self,
         spi: &mut HW::Spi,
         mode: RefreshMode,
     ) -> Result<Epd7In5V2<HW, StateReady>, HW::Error> {
         debug!("Initializing display to {}", mode);
-        self = self.reset().await?;
 
         let mut epd = Epd7In5V2 {
             hw: self.hw,
@@ -423,31 +431,18 @@ where
     Ok(())
 }
 
-impl<HW, STATE: StateAwake> Reset<HW::Error> for Epd7In5V2<HW, STATE>
+impl<HW, STATE: State> Reset<HW::Error> for Epd7In5V2<HW, STATE>
 where
     HW: ResetHw + DelayHw + ErrorHw,
     HW::Error: From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>,
 {
-    type DisplayOut = Epd7In5V2<HW, STATE>;
+    type DisplayOut = Epd7In5V2<HW, StateUninitialized>;
 
     async fn reset(mut self) -> Result<Self::DisplayOut, HW::Error> {
         reset_impl(&mut self.hw).await?;
-        Ok(self)
-    }
-}
-
-impl<HW, W: StateAwake> Reset<HW::Error> for Epd7In5V2<HW, StateAsleep<W>>
-where
-    HW: ResetHw + DelayHw + ErrorHw,
-    HW::Error: From<<HW::Reset as embedded_hal::digital::ErrorType>::Error>,
-{
-    type DisplayOut = Epd7In5V2<HW, W>;
-
-    async fn reset(self) -> Result<Self::DisplayOut, HW::Error> {
-        // will do reset inside init()
         Ok(Epd7In5V2 {
             hw: self.hw,
-            state: self.state.wake_state,
+            state: StateUninitialized(),
         })
     }
 }
